@@ -5,8 +5,6 @@
 #include "shm/shm.hpp"
 #include "single-task-runner/runner.hpp"
 #include "safe-shm/config.hpp"
-#include <fmt/core.h>
-
 namespace safe_shm
 {
     template <FlatType T>
@@ -28,10 +26,7 @@ namespace safe_shm
         }
     };
 
-    void logger(std::string_view msg) noexcept
-    {
-        fmt::print("{}", msg);
-    }
+    void logger(std::string_view msg) noexcept;
 
     template <FlatType T>
     class DblBufLoader
