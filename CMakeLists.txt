@@ -19,6 +19,7 @@ find_package(single-task-runner REQUIRED)
 find_package(double-buffer-swapper REQUIRED)
 find_package(flat-type REQUIRED)
 find_package(shm REQUIRED)
+find_package(exception-rt REQUIRED)
 
 # Create an INTERFACE library target for the header-only library.
 add_library(${PROJECT_NAME} INTERFACE)
@@ -62,4 +63,19 @@ configure_package_config_file(
 install(
   FILES "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
   DESTINATION lib/cmake/${PROJECT_NAME}
+)
+
+# Test executable
+add_executable(${PROJECT_NAME}_test test/safe_shm_test.cpp)
+target_include_directories(${PROJECT_NAME}_test PRIVATE include)
+target_link_libraries(${PROJECT_NAME}_test PRIVATE fmt flat-type::flat-type shm::shm exception-rt::exception-rt single-task-runner::single-task-runner double-buffer-swapper::double-buffer-swapper)
+
+set_debug_options(${PROJECT_NAME}_test)
+enable_sanitizers(${PROJECT_NAME}_test)
+
+# Export the target
+install(
+    TARGETS ${PROJECT_NAME}_test
+    EXPORT ${PROJECT_NAME}Targets
+    DESTINATION bin
 )

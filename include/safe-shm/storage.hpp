@@ -1,6 +1,5 @@
 #pragma once
 #include "flat-type/flat.hpp"
-#include "image-shm-dblbuf/image.hpp"
 #include "shm/semaphore.hpp"
 #include "shm/shm.hpp"
 #include "safe-shm/config.hpp"
