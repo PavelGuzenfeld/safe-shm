@@ -13,9 +13,22 @@ namespace safe_shm
     struct RetrunType
     {
         T **data = nullptr;
+        
+        auto &operator*() const noexcept
+        {
+            assert(data && "data is null");
+            assert(*data && "data is null");
+            return **data;
+        }
+
+        auto *operator->() const noexcept
+        {
+            assert(data && "data is null");
+            return *data;
+        }
     };
 
-    void log(std::string_view msg) noexcept
+    void logger(std::string_view msg) noexcept
     {
         fmt::print("{}", msg);
     }
@@ -24,7 +37,7 @@ namespace safe_shm
     class DblBufLoader
     {
     public:
-        DblBufLoader(std::string const &shm_name)
+        explicit DblBufLoader(std::string const &shm_name, void (*log)(std::string_view) = logger)
             : shm_(shm::path(shm_name), sizeof(T)),
               sem_(shm_name + SEM_SUFFIX, SEM_INIT),
               pre_allocated_(std::make_unique<T>()),
