@@ -1,11 +1,11 @@
 #pragma once
 #include "double-buffer-swapper/swapper.hpp"
 #include "flat-type/flat.hpp"
-#include "image-shm-dblbuf/image.hpp"
 #include "shm/semaphore.hpp"
 #include "shm/shm.hpp"
 #include "single-task-runner/runner.hpp"
 #include "safe-shm/config.hpp"
+#include <fmt/core.h>
 
 namespace safe_shm
 {
@@ -14,6 +14,11 @@ namespace safe_shm
     {
         T **data = nullptr;
     };
+
+    void log(std::string_view msg) noexcept
+    {
+        fmt::print("{}", msg);
+    }
 
     template <FlatType T>
     class DblBufLoader
@@ -42,7 +47,7 @@ namespace safe_shm
         {
             runner_->async_stop();
             sem_.destroy();
-            return_ptr_.img_ptr_ = nullptr;
+            return_ptr_.data = nullptr;
         }
 
         DblBufLoader(DblBufLoader const &) = delete;
@@ -50,7 +55,7 @@ namespace safe_shm
         DblBufLoader(DblBufLoader &&) = delete;
         DblBufLoader &operator=(DblBufLoader &&) = delete;
 
-        RetrunType load()
+        RetrunType<T> load()
         {
             auto *img = get_shm();
             assert(img && "shared memory data is null");
@@ -71,6 +76,6 @@ namespace safe_shm
         std::unique_ptr<DoubleBufferSwapper<T>> swapper_;
         std::unique_ptr<run::SingleTaskRunner> runner_;
         T *img_ptr_;
-        RetrunType return_ptr_;
+        RetrunType<T> return_ptr_;
     };
 } // namespace safe_shm
