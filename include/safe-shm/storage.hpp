@@ -10,7 +10,7 @@ namespace safe_shm
     class Storage
     {
     public:
-        Storage(std::string const &shm_name)
+        explicit Storage(std::string const &shm_name)
             : shm_(shm::path(shm_name), sizeof(T)),
               sem_(shm_name + SEM_SUFFIX, SEM_INIT)
         {

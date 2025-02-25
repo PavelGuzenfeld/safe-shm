@@ -14,7 +14,7 @@ int main()
 
     safe_shm::DblBufLoader<int> loader(shm_name);
     auto ret = loader.load();
-    assert(**(ret.data) == data);
+    assert(*ret == data);
 
     fmt::print("All tests passed\n");
     return 0;
