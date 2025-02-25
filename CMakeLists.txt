@@ -22,13 +22,26 @@ find_package(shm REQUIRED)
 find_package(exception-rt REQUIRED)
 
 # Create an INTERFACE library target for the header-only library.
-add_library(${PROJECT_NAME} INTERFACE)
+add_library(${PROJECT_NAME} STATIC src/dblbuf_loader.cpp)
+
+# Ensure PIC is enabled for this target.
+set_target_properties(${PROJECT_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+if (CMAKE_BUILD_TYPE STREQUAL "Release")
+    set_release_options(${PROJECT_NAME})
+else()
+    set_debug_options(${PROJECT_NAME})
+    enable_sanitizers(${PROJECT_NAME})
+endif()
 
 target_include_directories(${PROJECT_NAME}
-    INTERFACE
-      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-      $<INSTALL_INTERFACE:include>
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
 )
+
+target_link_libraries(${PROJECT_NAME} PRIVATE fmt double-buffer-swapper::double-buffer-swapper flat-type::flat-type shm::shm single-task-runner::single-task-runner exception-rt::exception-rt)
+
 
 # Install header files
 install(
@@ -36,10 +49,11 @@ install(
     DESTINATION include
 )
 
-# Export the target so that consumers can use the namespaced alias.
+# Export the target
 install(
     TARGETS ${PROJECT_NAME}
     EXPORT ${PROJECT_NAME}Targets
+    DESTINATION lib
     INCLUDES DESTINATION include
 )
 
@@ -68,7 +82,7 @@ install(
 # Test executable
 add_executable(${PROJECT_NAME}_test test/safe_shm_test.cpp)
 target_include_directories(${PROJECT_NAME}_test PRIVATE include)
-target_link_libraries(${PROJECT_NAME}_test PRIVATE fmt flat-type::flat-type shm::shm exception-rt::exception-rt single-task-runner::single-task-runner double-buffer-swapper::double-buffer-swapper)
+target_link_libraries(${PROJECT_NAME}_test PRIVATE fmt flat-type::flat-type shm::shm exception-rt::exception-rt single-task-runner::single-task-runner double-buffer-swapper::double-buffer-swapper safe-shm)
 
 set_debug_options(${PROJECT_NAME}_test)
 enable_sanitizers(${PROJECT_NAME}_test)
