@@ -187,18 +187,25 @@ docker run --rm -v $(pwd):/src safe-shm-test bash -c \
 
 Run: `./benchmark` (built with `-O3 -DNDEBUG`, uses [nanobench](https://github.com/martinus/nanobench))
 
-| Method | 1 MB throughput | FHD RGB (6 MB) throughput |
-|--------|----------------|--------------------------|
-| memcpy (baseline) | 25.2 GB/s | 19.6 GB/s |
-| raw POSIX shm (no sync) | 25.6 GB/s | 19.5 GB/s |
-| **Seqlock (lock-free)** | **8.0 GB/s** | **22.4 GB/s** |
-| SharedMemory (no sync) | 11.2 GB/s | - |
-| DoubleBufferShm (futex) | 5.3 GB/s | 6.2 GB/s |
-| pipe (kernel IPC) | 6.0 GB/s | - |
+### Throughput (store + load cycle)
 
-- **Seqlock**: 22.4 GB/s for FHD images — matches raw POSIX shm with full consistency guarantees
-- **DoubleBufferShm**: 6.2 GB/s for FHD images (2.8x faster than POSIX semaphore version)
-- **Seqlock vs DoubleBufferShm**: 2.9x faster at FHD — no background thread, no extra memcpy
+| Method | 64 B | 4 KB | 1 MB | FHD RGB (6 MB) |
+|--------|-----:|-----:|-----:|---------------:|
+| memcpy (baseline) | 59.8 GB/s | 113.9 GB/s | 26.5 GB/s | 22.4 GB/s |
+| raw POSIX shm (no sync) | 49.4 GB/s | 117.3 GB/s | 26.3 GB/s | 21.3 GB/s |
+| **Seqlock (lock-free)** | **0.4 GB/s** | **8.3 GB/s** | **7.5 GB/s** | **20.8 GB/s** |
+| SharedMemory (no sync) | 39.9 GB/s | 61.9 GB/s | 12.6 GB/s | — |
+| DoubleBufferShm (futex) | ~5 MB/s | 0.1 GB/s | 5.7 GB/s | 7.8 GB/s |
+| Storage + DblBufLoader (futex) | ~3 MB/s | 0.2 GB/s | 5.9 GB/s | — |
+| pipe (kernel IPC) | 0.1 GB/s | 8.2 GB/s | 6.0 GB/s | — |
+
+### Key takeaways
+
+- **Seqlock at FHD**: 20.8 GB/s — **98% of raw memcpy** with full read consistency
+- **Seqlock vs DoubleBufferShm**: **2.7x faster** at FHD (no background thread, no extra memcpy)
+- **DoubleBufferShm**: thread scheduling dominates at small payloads; competitive at 1 MB+
+- **Seqlock read latency**: single `memcpy` — no lock acquire, no syscall, no thread wake
+- **Cross-process (fork)**: ~9 µs for 64 B round-trip (dominated by fork overhead)
 
 ## License
 
