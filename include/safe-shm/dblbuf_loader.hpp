@@ -5,25 +5,38 @@
 #include "shm/shm.hpp"
 #include "single-task-runner/runner.hpp"
 #include "safe-shm/config.hpp"
+#include <atomic>
+#include <cassert>
+
 namespace safe_shm
 {
     template <FlatType T>
-    struct RetrunType
+    class Snapshot
     {
-        T **data = nullptr;
-        
-        auto &operator*() const noexcept
+    public:
+        explicit Snapshot(std::atomic<T *> *ptr) noexcept : ptr_(ptr) {}
+
+        T const &operator*() const noexcept
         {
-            assert(data && "data is null");
-            assert(*data && "data is null");
-            return **data;
+            auto *p = ptr_->load(std::memory_order_acquire);
+            assert(p && "snapshot data is null");
+            return *p;
         }
 
-        auto *operator->() const noexcept
+        T const *operator->() const noexcept
         {
-            assert(data && "data is null");
-            return *data;
+            auto *p = ptr_->load(std::memory_order_acquire);
+            assert(p && "snapshot data is null");
+            return p;
         }
+
+        T *get() const noexcept
+        {
+            return ptr_->load(std::memory_order_acquire);
+        }
+
+    private:
+        std::atomic<T *> *ptr_;
     };
 
     void logger(std::string_view msg) noexcept;
@@ -36,26 +49,29 @@ namespace safe_shm
             : shm_(shm::path(shm_name), sizeof(T)),
               sem_(shm_name + SEM_SUFFIX, SEM_INIT),
               pre_allocated_(std::make_unique<T>()),
-              img_ptr_(nullptr),
-              return_ptr_{&img_ptr_}
+              swapper_ptr_(nullptr),
+              published_ptr_(nullptr)
         {
-            swapper_ = std::make_unique<DoubleBufferSwapper<T>>(&img_ptr_, pre_allocated_.get());
-            runner_ = std::make_unique<run::SingleTaskRunner>([&]
-                                                              {
-                                                            sem_.wait();
-                                                            swapper_->swap();
-                                                            sem_.post(); },
-                                                              [&](std::string_view msg)
-                                                              { log(msg); });
+            swapper_ = std::make_unique<DoubleBufferSwapper<T>>(&swapper_ptr_, pre_allocated_.get());
+            runner_ = std::make_unique<run::SingleTaskRunner>(
+                [this]
+                {
+                    sem_.wait();
+                    swapper_->swap();
+                    published_ptr_.store(swapper_ptr_, std::memory_order_release);
+                    sem_.post();
+                },
+                [log](std::string_view msg)
+                { log(msg); });
             runner_->async_start();
             swapper_->set_active(get_shm());
+            published_ptr_.store(swapper_ptr_, std::memory_order_release);
         }
 
         ~DblBufLoader()
         {
             runner_->async_stop();
             sem_.destroy();
-            return_ptr_.data = nullptr;
         }
 
         DblBufLoader(DblBufLoader const &) = delete;
@@ -63,13 +79,18 @@ namespace safe_shm
         DblBufLoader(DblBufLoader &&) = delete;
         DblBufLoader &operator=(DblBufLoader &&) = delete;
 
-        RetrunType<T> load()
+        Snapshot<T> load()
         {
-            auto *img = get_shm();
-            assert(img && "shared memory data is null");
-            swapper_->stage(img);
+            auto *shm = get_shm();
+            assert(shm && "shared memory data is null");
+            swapper_->stage(shm);
             runner_->trigger_once();
-            return return_ptr_;
+            return Snapshot<T>{&published_ptr_};
+        }
+
+        void wait()
+        {
+            runner_->wait_for_all_tasks();
         }
 
     private:
@@ -83,7 +104,7 @@ namespace safe_shm
         std::unique_ptr<T> pre_allocated_;
         std::unique_ptr<DoubleBufferSwapper<T>> swapper_;
         std::unique_ptr<run::SingleTaskRunner> runner_;
-        T *img_ptr_;
-        RetrunType<T> return_ptr_;
+        T *swapper_ptr_;
+        std::atomic<T *> published_ptr_;
     };
 } // namespace safe_shm

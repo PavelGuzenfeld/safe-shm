@@ -21,10 +21,9 @@ find_package(flat-type REQUIRED)
 find_package(shm REQUIRED)
 find_package(exception-rt REQUIRED)
 
-# Create an INTERFACE library target for the header-only library.
+# Library
 add_library(${PROJECT_NAME} STATIC src/dblbuf_loader.cpp)
 
-# Ensure PIC is enabled for this target.
 set_target_properties(${PROJECT_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 if (CMAKE_BUILD_TYPE STREQUAL "Release")
@@ -40,8 +39,15 @@ target_include_directories(${PROJECT_NAME}
         $<INSTALL_INTERFACE:include>
 )
 
-target_link_libraries(${PROJECT_NAME} PRIVATE fmt double-buffer-swapper::double-buffer-swapper flat-type::flat-type shm::shm single-task-runner::single-task-runner exception-rt::exception-rt)
-
+target_link_libraries(${PROJECT_NAME}
+    PRIVATE
+        fmt
+        double-buffer-swapper::double-buffer-swapper
+        flat-type::flat-type
+        shm::shm
+        single-task-runner::single-task-runner
+        exception-rt::exception-rt
+)
 
 # Install header files
 install(
@@ -79,17 +85,30 @@ install(
   DESTINATION lib/cmake/${PROJECT_NAME}
 )
 
-# Test executable
+# Tests
+include(FetchContent)
+FetchContent_Declare(
+    doctest
+    GIT_REPOSITORY https://github.com/doctest/doctest.git
+    GIT_TAG v2.4.12
+)
+FetchContent_MakeAvailable(doctest)
+
 add_executable(${PROJECT_NAME}_test test/safe_shm_test.cpp)
 target_include_directories(${PROJECT_NAME}_test PRIVATE include)
-target_link_libraries(${PROJECT_NAME}_test PRIVATE fmt flat-type::flat-type shm::shm exception-rt::exception-rt single-task-runner::single-task-runner double-buffer-swapper::double-buffer-swapper safe-shm)
+target_link_libraries(${PROJECT_NAME}_test
+    PRIVATE
+        fmt
+        doctest::doctest
+        flat-type::flat-type
+        shm::shm
+        exception-rt::exception-rt
+        single-task-runner::single-task-runner
+        double-buffer-swapper::double-buffer-swapper
+        safe-shm
+)
 
 set_debug_options(${PROJECT_NAME}_test)
 enable_sanitizers(${PROJECT_NAME}_test)
 
-# Export the target
-install(
-    TARGETS ${PROJECT_NAME}_test
-    EXPORT ${PROJECT_NAME}Targets
-    DESTINATION bin
-)
+add_test(NAME ${PROJECT_NAME}_test COMMAND ${PROJECT_NAME}_test)
