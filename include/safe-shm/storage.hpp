@@ -27,4 +27,4 @@ namespace safe_shm
         shm::Shm shm_;
         shm::Semaphore sem_;
     };
-} // namespace safe-shm
+} // namespace safe_shm
