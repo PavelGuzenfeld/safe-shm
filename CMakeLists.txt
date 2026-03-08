@@ -152,10 +152,18 @@ add_integration_test(shared_memory_test test/shared_memory_test.cpp)
 add_integration_test(image_shm_test test/image_shm_test.cpp)
 add_integration_test(integration_test test/integration_test.cpp)
 
-# Benchmarks (always built with -O3, no sanitizers)
+# Benchmarks (nanobench, always built with -O3, no sanitizers)
+FetchContent_Declare(
+    nanobench
+    GIT_REPOSITORY https://github.com/martinus/nanobench.git
+    GIT_TAG v4.3.11
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(nanobench)
+
 add_executable(benchmark bench/benchmark.cpp)
 target_include_directories(benchmark PRIVATE include)
-target_link_libraries(benchmark PRIVATE doctest::doctest fmt shm::shm exception-rt::exception-rt)
+target_link_libraries(benchmark PRIVATE nanobench fmt shm::shm exception-rt::exception-rt)
 target_compile_options(benchmark PRIVATE -O3 -DNDEBUG)
 set_warnings(benchmark)
 add_test(NAME benchmark COMMAND benchmark)

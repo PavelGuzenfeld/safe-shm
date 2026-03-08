@@ -1,7 +1,6 @@
 #pragma once
-#include "safe-shm/config.hpp"
 #include "safe-shm/flat_type.hpp"
-#include "shm/semaphore.hpp"
+#include "safe-shm/shm_lock.hpp"
 #include "shm/shm.hpp"
 
 namespace safe_shm
@@ -12,19 +11,19 @@ namespace safe_shm
     public:
         explicit Storage(std::string const &shm_name)
             : shm_(shm::path(shm_name), sizeof(T)),
-              sem_(shm_name + SEM_SUFFIX, SEM_INIT)
+              lock_(shm_name + "_lock")
         {
         }
 
         void store(T const &data)
         {
-            sem_.wait();
+            lock_.lock();
             *static_cast<T *>(shm_.get()) = data;
-            sem_.post();
+            lock_.unlock();
         }
 
     private:
         shm::Shm shm_;
-        shm::Semaphore sem_;
+        ShmLock lock_;
     };
 } // namespace safe_shm
