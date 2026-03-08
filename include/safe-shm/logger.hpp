@@ -1,9 +1,10 @@
-#include "safe-shm/dblbuf_loader.hpp"
+#pragma once
 #include <fmt/core.h>
+#include <string_view>
 
 namespace safe_shm
 {
-    void logger(std::string_view msg) noexcept
+    inline void default_logger(std::string_view msg) noexcept
     {
         fmt::print("{}", msg);
     }
