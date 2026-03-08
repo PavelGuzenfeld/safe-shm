@@ -140,7 +140,56 @@ TEST_CASE("SeqlockReader load_blocking waits for new data")
         safe_shm::SeqlockWriter<int> w(name);
         w.store(42); });
 
-    int val = reader.load_blocking(last_seq);
-    CHECK(val == 42);
+    auto val = reader.load_blocking(last_seq);
+    REQUIRE(val.has_value());
+    CHECK(*val == 42);
+    writer.join();
+}
+
+TEST_CASE("load_blocking returns nullopt on timeout")
+{
+    constexpr auto name = "test_seqlock_timeout";
+
+    safe_shm::Seqlock<int> sl(name);
+    sl.store(0);
+
+    uint32_t last_seq = sl.sequence();
+
+    // No writer — should timeout
+    auto result = sl.load_blocking(last_seq, uint64_t{50'000'000}); // 50 ms
+    CHECK_FALSE(result.has_value());
+}
+
+TEST_CASE("load_blocking handles sequence wrap (!= instead of >)")
+{
+    constexpr auto name = "test_seqlock_wrap";
+
+    safe_shm::Seqlock<int> sl(name);
+    sl.store(100);
+
+    // Simulate a high last_seq (as if counter had been running a long time)
+    // The key point: even if last_seq is very high, != will detect the change
+    uint32_t last_seq = 0xFFFF'FFFEu; // near max uint32_t
+    auto result = sl.load_blocking(last_seq, uint64_t{100'000'000}); // 100ms timeout
+    REQUIRE(result.has_value());
+    CHECK(*result == 100);
+}
+
+TEST_CASE("Seqlock load_blocking works on combined class")
+{
+    constexpr auto name = "test_seqlock_combined_blocking";
+
+    safe_shm::Seqlock<int> sl(name);
+    sl.store(0);
+    uint32_t last_seq = sl.sequence();
+
+    std::jthread writer([&]
+                        {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        sl.store(77); });
+
+    auto val = sl.load_blocking(last_seq);
+    REQUIRE(val.has_value());
+    CHECK(*val == 77);
     writer.join();
 }
