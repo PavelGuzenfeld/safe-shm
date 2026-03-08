@@ -2,10 +2,13 @@
 #include "safe-shm/flat_type.hpp"
 #include "shm/shm.hpp"
 #include <atomic>
+#include <climits>
 #include <cstdint>
 #include <cstring>
 #include <linux/futex.h>
+#include <optional>
 #include <sys/syscall.h>
+#include <time.h>
 #include <unistd.h>
 
 // Seqlocks intentionally race on the data payload — the sequence counter
@@ -53,8 +56,8 @@ namespace safe_shm
             std::memcpy(payload(), &data, sizeof(T));
             // Even sequence = write complete
             std::atomic_ref<uint32_t>(*s).store(cur + 2, std::memory_order_release);
-            // Wake any reader blocked on futex wait
-            static_cast<void>(syscall(SYS_futex, s, FUTEX_WAKE, 1, nullptr, nullptr, 0));
+            // Wake all readers blocked on futex wait
+            static_cast<void>(syscall(SYS_futex, s, FUTEX_WAKE, INT_MAX, nullptr, nullptr, 0));
         }
 
     private:
@@ -106,16 +109,27 @@ namespace safe_shm
             }
         }
 
-        /// Block until new data is available (sequence > last_seen),
+        /// Block until new data is available (sequence != last_seen),
         /// then return a consistent snapshot.
-        SAFE_SHM_NO_TSAN T load_blocking(uint32_t &last_seq) const noexcept
+        /// Optional timeout in nanoseconds; returns std::nullopt on timeout.
+        SAFE_SHM_NO_TSAN std::optional<T> load_blocking(
+            uint32_t &last_seq,
+            std::optional<uint64_t> timeout_ns = std::nullopt) const noexcept
         {
             auto const *s = seq();
+            struct timespec ts{};
+            struct timespec *ts_ptr = nullptr;
+            if (timeout_ns)
+            {
+                ts.tv_sec = static_cast<time_t>(*timeout_ns / 1'000'000'000ULL);
+                ts.tv_nsec = static_cast<long>(*timeout_ns % 1'000'000'000ULL);
+                ts_ptr = &ts;
+            }
             while (true)
             {
                 auto cur = std::atomic_ref<uint32_t const>(*s)
                                .load(std::memory_order_acquire);
-                if (cur > last_seq && (cur & 1u) == 0)
+                if (cur != last_seq && (cur & 1u) == 0)
                 {
                     T result;
                     std::memcpy(&result, payload(), sizeof(T));
@@ -128,12 +142,14 @@ namespace safe_shm
                     }
                     continue;
                 }
-                // No new data — sleep on futex until writer wakes us
-                static_cast<void>(syscall(
+                // No new data — sleep on futex until writer wakes us (or timeout)
+                auto rc = syscall(
                     SYS_futex,
                     const_cast<uint32_t *>(s),
                     FUTEX_WAIT, cur,
-                    nullptr, nullptr, 0));
+                    ts_ptr, nullptr, 0);
+                if (rc == -1 && errno == ETIMEDOUT)
+                    return std::nullopt;
             }
         }
 
@@ -193,6 +209,48 @@ namespace safe_shm
                                  .load(std::memory_order_acquire);
                 if (before == after)
                     return result;
+            }
+        }
+
+        /// Block until new data is available (sequence != last_seen).
+        /// Optional timeout in nanoseconds; returns std::nullopt on timeout.
+        SAFE_SHM_NO_TSAN std::optional<T> load_blocking(
+            uint32_t &last_seq,
+            std::optional<uint64_t> timeout_ns = std::nullopt) const noexcept
+        {
+            auto const *s = seq();
+            struct timespec ts{};
+            struct timespec *ts_ptr = nullptr;
+            if (timeout_ns)
+            {
+                ts.tv_sec = static_cast<time_t>(*timeout_ns / 1'000'000'000ULL);
+                ts.tv_nsec = static_cast<long>(*timeout_ns % 1'000'000'000ULL);
+                ts_ptr = &ts;
+            }
+            while (true)
+            {
+                auto cur = std::atomic_ref<uint32_t const>(*s)
+                               .load(std::memory_order_acquire);
+                if (cur != last_seq && (cur & 1u) == 0)
+                {
+                    T result;
+                    std::memcpy(&result, payload(), sizeof(T));
+                    auto after = std::atomic_ref<uint32_t const>(*s)
+                                     .load(std::memory_order_acquire);
+                    if (cur == after)
+                    {
+                        last_seq = cur;
+                        return result;
+                    }
+                    continue;
+                }
+                auto rc = syscall(
+                    SYS_futex,
+                    const_cast<uint32_t *>(s),
+                    FUTEX_WAIT, cur,
+                    ts_ptr, nullptr, 0);
+                if (rc == -1 && errno == ETIMEDOUT)
+                    return std::nullopt;
             }
         }
 
