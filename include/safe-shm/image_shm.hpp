@@ -14,11 +14,11 @@
 namespace safe_shm
 {
     template <FlatType T>
-    class DblBufLoader
+    class DoubleBufferShm
     {
     public:
-        explicit DblBufLoader(std::string const &shm_name,
-                              void (*log)(std::string_view) = default_logger)
+        explicit DoubleBufferShm(std::string const &shm_name,
+                                 void (*log)(std::string_view) = default_logger)
             : shm_(shm::path(shm_name), sizeof(T)),
               sem_(shm_name + SEM_SUFFIX, SEM_INIT),
               pre_allocated_(std::make_unique<T>()),
@@ -40,22 +40,27 @@ namespace safe_shm
             published_ptr_.store(swapper_ptr_, std::memory_order_release);
         }
 
-        ~DblBufLoader()
+        ~DoubleBufferShm()
         {
             runner_.reset();
             sem_.destroy();
         }
 
-        DblBufLoader(DblBufLoader const &) = delete;
-        DblBufLoader &operator=(DblBufLoader const &) = delete;
-        DblBufLoader(DblBufLoader &&) = delete;
-        DblBufLoader &operator=(DblBufLoader &&) = delete;
+        DoubleBufferShm(DoubleBufferShm const &) = delete;
+        DoubleBufferShm &operator=(DoubleBufferShm const &) = delete;
+        DoubleBufferShm(DoubleBufferShm &&) = delete;
+        DoubleBufferShm &operator=(DoubleBufferShm &&) = delete;
+
+        void store(T const &data)
+        {
+            sem_.wait();
+            *get_shm() = data;
+            sem_.post();
+        }
 
         Snapshot<T> load()
         {
-            auto *shm = get_shm();
-            assert(shm && "shared memory data is null");
-            swapper_.stage(shm);
+            swapper_.stage(get_shm());
             runner_->trigger();
             return Snapshot<T>{&published_ptr_};
         }
@@ -65,10 +70,15 @@ namespace safe_shm
             runner_->wait();
         }
 
+        void const *shm_addr() const noexcept { return shm_.get(); }
+        void const *pre_allocated_addr() const noexcept { return pre_allocated_.get(); }
+
     private:
         T *get_shm() const noexcept
         {
-            return static_cast<T *>(shm_.get());
+            auto *p = static_cast<T *>(shm_.get());
+            assert(p && "shared memory data is null");
+            return p;
         }
 
         shm::Shm shm_;

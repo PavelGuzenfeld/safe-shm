@@ -1,8 +1,8 @@
 #pragma once
-#include "flat-type/flat.hpp"
+#include "safe-shm/config.hpp"
+#include "safe-shm/flat_type.hpp"
 #include "shm/semaphore.hpp"
 #include "shm/shm.hpp"
-#include "safe-shm/config.hpp"
 
 namespace safe_shm
 {
@@ -16,7 +16,7 @@ namespace safe_shm
         {
         }
 
-        inline void store(T const &data)
+        void store(T const &data)
         {
             sem_.wait();
             *static_cast<T *>(shm_.get()) = data;

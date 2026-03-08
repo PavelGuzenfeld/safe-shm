@@ -1,61 +1,54 @@
 cmake_minimum_required(VERSION 3.20)
 project(safe-shm)
 
-# Require C++23
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# default to release build for the library if not specified
 if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose the build type" FORCE)
 endif()
-message(STATUS "Library will be built using CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}")
 
-# Find dependencies
-find_package(cmake-library REQUIRED)
+# Dependencies
 find_package(fmt REQUIRED)
-find_package(single-task-runner REQUIRED)
-find_package(double-buffer-swapper REQUIRED)
-find_package(flat-type REQUIRED)
 find_package(shm REQUIRED)
 find_package(exception-rt REQUIRED)
 
-# Library
-add_library(${PROJECT_NAME} STATIC src/dblbuf_loader.cpp)
+# Compiler options
+function(set_warnings target)
+    target_compile_options(${target} PRIVATE
+        -Wall -Wextra -Wpedantic -Werror
+        -Wconversion -Wshadow -Wnon-virtual-dtor
+    )
+endfunction()
 
-set_target_properties(${PROJECT_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+function(set_sanitizers target)
+    target_compile_options(${target} PRIVATE -fsanitize=address,undefined)
+    target_link_options(${target} PRIVATE -fsanitize=address,undefined)
+endfunction()
 
-if (CMAKE_BUILD_TYPE STREQUAL "Release")
-    set_release_options(${PROJECT_NAME})
-else()
-    set_debug_options(${PROJECT_NAME})
-    enable_sanitizers(${PROJECT_NAME})
-endif()
+# Header-only library (no .cpp files needed)
+add_library(${PROJECT_NAME} INTERFACE)
 
 target_include_directories(${PROJECT_NAME}
-    PUBLIC
+    INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
 )
 
 target_link_libraries(${PROJECT_NAME}
-    PRIVATE
+    INTERFACE
         fmt
-        double-buffer-swapper::double-buffer-swapper
-        flat-type::flat-type
         shm::shm
-        single-task-runner::single-task-runner
         exception-rt::exception-rt
 )
 
-# Install header files
+# Install
 install(
     DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
     DESTINATION include
 )
 
-# Export the target
 install(
     TARGETS ${PROJECT_NAME}
     EXPORT ${PROJECT_NAME}Targets
@@ -70,20 +63,46 @@ install(
     DESTINATION lib/cmake/${PROJECT_NAME}
 )
 
-# Configure the package configuration file.
 include(CMakePackageConfigHelpers)
 configure_package_config_file(
-  "${CMAKE_CURRENT_SOURCE_DIR}/cmake/${PROJECT_NAME}Config.cmake.in"
-  "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
-  INSTALL_DESTINATION lib/cmake/${PROJECT_NAME}
-  NO_SET_AND_CHECK_MACRO
-  NO_CHECK_REQUIRED_COMPONENTS_MACRO
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/${PROJECT_NAME}Config.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
+    INSTALL_DESTINATION lib/cmake/${PROJECT_NAME}
+    NO_SET_AND_CHECK_MACRO
+    NO_CHECK_REQUIRED_COMPONENTS_MACRO
 )
 
 install(
-  FILES "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
-  DESTINATION lib/cmake/${PROJECT_NAME}
+    FILES "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
+    DESTINATION lib/cmake/${PROJECT_NAME}
 )
+
+# Optional: Python bindings (nanobind)
+find_package(Python3 COMPONENTS Interpreter Development QUIET)
+find_package(nanobind CONFIG QUIET HINTS /usr/local/nanobind/cmake)
+
+if (nanobind_FOUND AND Python3_FOUND)
+    message(STATUS "Building Python bindings (nanobind found)")
+    nanobind_add_module(image_shm_dblbuff
+        NB_STATIC
+        src/bindings/nanobind_image_shm.cpp
+    )
+    target_include_directories(image_shm_dblbuff PRIVATE include)
+    target_link_libraries(image_shm_dblbuff PRIVATE fmt shm::shm exception-rt::exception-rt)
+
+    if (CMAKE_BUILD_TYPE STREQUAL "Release")
+        target_compile_options(image_shm_dblbuff PRIVATE -O3 -DNDEBUG)
+    else()
+        set_warnings(image_shm_dblbuff)
+        set_sanitizers(image_shm_dblbuff)
+    endif()
+
+    install(TARGETS image_shm_dblbuff
+        DESTINATION lib/python${Python3_VERSION_MAJOR}.${Python3_VERSION_MINOR}/site-packages
+    )
+else()
+    message(STATUS "Skipping Python bindings (nanobind or Python3 not found)")
+endif()
 
 # Tests
 include(FetchContent)
@@ -94,21 +113,17 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(doctest)
 
-add_executable(${PROJECT_NAME}_test test/safe_shm_test.cpp)
-target_include_directories(${PROJECT_NAME}_test PRIVATE include)
-target_link_libraries(${PROJECT_NAME}_test
-    PRIVATE
-        fmt
-        doctest::doctest
-        flat-type::flat-type
-        shm::shm
-        exception-rt::exception-rt
-        single-task-runner::single-task-runner
-        double-buffer-swapper::double-buffer-swapper
-        safe-shm
-)
+enable_testing()
 
-set_debug_options(${PROJECT_NAME}_test)
-enable_sanitizers(${PROJECT_NAME}_test)
+function(add_safe_shm_test name source)
+    add_executable(${name} ${source})
+    target_include_directories(${name} PRIVATE include)
+    target_link_libraries(${name} PRIVATE doctest::doctest fmt shm::shm exception-rt::exception-rt)
+    set_warnings(${name})
+    set_sanitizers(${name})
+    add_test(NAME ${name} COMMAND ${name})
+endfunction()
 
-add_test(NAME ${PROJECT_NAME}_test COMMAND ${PROJECT_NAME}_test)
+add_safe_shm_test(safe_shm_test test/safe_shm_test.cpp)
+add_safe_shm_test(shared_memory_test test/shared_memory_test.cpp)
+add_safe_shm_test(image_shm_test test/image_shm_test.cpp)
