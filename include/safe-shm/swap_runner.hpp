@@ -1,7 +1,7 @@
 #pragma once
-#include <condition_variable>
+#include <atomic>
+#include <cstdint>
 #include <functional>
-#include <mutex>
 #include <string_view>
 #include <thread>
 
@@ -27,31 +27,31 @@ namespace safe_shm
 
         void trigger() noexcept
         {
-            {
-                std::lock_guard lock(mutex_);
-                triggered_ = true;
-                idle_ = false;
-            }
-            trigger_cv_.notify_one();
+            idle_.store(0, std::memory_order_relaxed);
+            triggered_.store(1, std::memory_order_release);
+            triggered_.notify_one();
         }
 
         void wait() noexcept
         {
-            std::unique_lock lock(mutex_);
-            done_cv_.wait(lock, [this] { return idle_; });
+            idle_.wait(0, std::memory_order_acquire);
         }
 
     private:
         void run(std::stop_token st) noexcept
         {
+            // When stop is requested, wake the trigger wait
+            std::stop_callback cb(st, [this]
+                                  {
+                triggered_.store(1, std::memory_order_release);
+                triggered_.notify_one(); });
+
             while (!st.stop_requested())
             {
-                std::unique_lock lock(mutex_);
-                trigger_cv_.wait(lock, st, [this] { return triggered_; });
+                triggered_.wait(0, std::memory_order_acquire);
                 if (st.stop_requested())
                     break;
-                triggered_ = false;
-                lock.unlock();
+                triggered_.store(0, std::memory_order_relaxed);
 
                 try
                 {
@@ -62,21 +62,19 @@ namespace safe_shm
                     log_("SwapRunner: task threw exception\n");
                 }
 
-                {
-                    std::lock_guard lk(mutex_);
-                    idle_ = true;
-                }
-                done_cv_.notify_all();
+                idle_.store(1, std::memory_order_release);
+                idle_.notify_all();
             }
+
+            // Ensure any pending wait() unblocks on shutdown
+            idle_.store(1, std::memory_order_release);
+            idle_.notify_all();
         }
 
         task_fn task_;
         log_fn log_;
-        std::mutex mutex_;
-        std::condition_variable_any trigger_cv_;
-        std::condition_variable done_cv_;
-        bool triggered_ = false;
-        bool idle_ = true;
+        std::atomic<uint32_t> triggered_{0};
+        std::atomic<uint32_t> idle_{1};
         std::jthread thread_; // must be last — starts thread in constructor
     };
 } // namespace safe_shm
