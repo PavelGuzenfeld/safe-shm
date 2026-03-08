@@ -9,6 +9,9 @@ if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose the build type" FORCE)
 endif()
 
+# Sanitizer selection: SANITIZER=asan (default), tsan, or none
+set(SANITIZER "asan" CACHE STRING "Sanitizer: asan, tsan, or none")
+
 # Dependencies
 find_package(fmt REQUIRED)
 find_package(shm REQUIRED)
@@ -23,11 +26,16 @@ function(set_warnings target)
 endfunction()
 
 function(set_sanitizers target)
-    target_compile_options(${target} PRIVATE -fsanitize=address,undefined)
-    target_link_options(${target} PRIVATE -fsanitize=address,undefined)
+    if (SANITIZER STREQUAL "tsan")
+        target_compile_options(${target} PRIVATE -fsanitize=thread -g)
+        target_link_options(${target} PRIVATE -fsanitize=thread)
+    elseif (SANITIZER STREQUAL "asan")
+        target_compile_options(${target} PRIVATE -fsanitize=address,undefined -g)
+        target_link_options(${target} PRIVATE -fsanitize=address,undefined)
+    endif()
 endfunction()
 
-# Header-only library (no .cpp files needed)
+# Header-only library
 add_library(${PROJECT_NAME} INTERFACE)
 
 target_include_directories(${PROJECT_NAME}
@@ -115,7 +123,22 @@ FetchContent_MakeAvailable(doctest)
 
 enable_testing()
 
-function(add_safe_shm_test name source)
+# Unit tests (no shm dependency — pure C++ components)
+function(add_unit_test name source)
+    add_executable(${name} ${source})
+    target_include_directories(${name} PRIVATE include)
+    target_link_libraries(${name} PRIVATE doctest::doctest)
+    set_warnings(${name})
+    set_sanitizers(${name})
+    add_test(NAME ${name} COMMAND ${name})
+endfunction()
+
+add_unit_test(flat_type_test test/flat_type_test.cpp)
+add_unit_test(double_buffer_swapper_test test/double_buffer_swapper_test.cpp)
+add_unit_test(swap_runner_test test/swap_runner_test.cpp)
+
+# Integration tests (require shm dependency)
+function(add_integration_test name source)
     add_executable(${name} ${source})
     target_include_directories(${name} PRIVATE include)
     target_link_libraries(${name} PRIVATE doctest::doctest fmt shm::shm exception-rt::exception-rt)
@@ -124,6 +147,7 @@ function(add_safe_shm_test name source)
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 
-add_safe_shm_test(safe_shm_test test/safe_shm_test.cpp)
-add_safe_shm_test(shared_memory_test test/shared_memory_test.cpp)
-add_safe_shm_test(image_shm_test test/image_shm_test.cpp)
+add_integration_test(safe_shm_test test/safe_shm_test.cpp)
+add_integration_test(shared_memory_test test/shared_memory_test.cpp)
+add_integration_test(image_shm_test test/image_shm_test.cpp)
+add_integration_test(integration_test test/integration_test.cpp)
