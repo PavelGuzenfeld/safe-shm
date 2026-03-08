@@ -3,6 +3,7 @@
 #include "safe-shm/dblbuf_loader.hpp"
 #include "safe-shm/image.hpp"
 #include "safe-shm/image_shm.hpp"
+#include "safe-shm/seqlock.hpp"
 #include "safe-shm/shared_memory.hpp"
 #include "safe-shm/storage.hpp"
 
@@ -225,6 +226,38 @@ int main()
         run("DoubleBufferShm 1 MB", "bench_dbshm_l", large);
     }
 
+    // ── Seqlock (store + load cycle) ──────────────────────────────────
+    {
+        ankerl::nanobench::Bench b;
+        b.title("Seqlock (store + load, lock-free)")
+            .warmup(100)
+            .minEpochIterations(500);
+
+        auto run = [&](char const *name, char const *shm_name, auto const &src)
+        {
+            using T = std::decay_t<decltype(src)>;
+            safe_shm::Seqlock<T> sl(shm_name);
+
+            b.batch(sizeof(T)).unit("byte").run(name, [&]
+                                                {
+                sl.store(src);
+                auto val = sl.load();
+                ankerl::nanobench::doNotOptimizeAway(val); });
+        };
+
+        SmallPayload small{};
+        std::fill(std::begin(small.values), std::end(small.values), 3.0);
+        run("Seqlock 64 B", "bench_seqlock_s", small);
+
+        MediumPayload medium{};
+        std::memset(medium.data, 0xEE, sizeof(medium.data));
+        run("Seqlock 4 KB", "bench_seqlock_m", medium);
+
+        LargePayload large{};
+        std::memset(large.data, 0xFF, sizeof(large.data));
+        run("Seqlock 1 MB", "bench_seqlock_l", large);
+    }
+
     // ── pipe baseline ───────────────────────────────────────────────────
     {
         ankerl::nanobench::Bench b;
@@ -280,6 +313,20 @@ int main()
                 auto snap = shm.load();
                 shm.wait();
                 ankerl::nanobench::doNotOptimizeAway(snap->timestamp); });
+        }
+
+        {
+            safe_shm::Seqlock<Image> sl("bench_fhd_seqlock");
+            auto img = std::make_unique<Image>();
+            img->timestamp = 3;
+            img->frame_number = 3;
+            std::fill(img->data.begin(), img->data.end(), 0xCC);
+
+            b.batch(sizeof(Image)).unit("byte").run("Seqlock FHD RGB", [&]
+                                                    {
+                sl.store(*img);
+                auto val = sl.load();
+                ankerl::nanobench::doNotOptimizeAway(val.timestamp); });
         }
 
         {
