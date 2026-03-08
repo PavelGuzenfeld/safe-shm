@@ -1,8 +1,8 @@
 # safe-shm
 
-Thread-safe shared memory with double-buffered loading for lock-free reads.
+Thread-safe shared memory with lock-free seqlock and double-buffered loading.
 
-Header-only C++23 library. Uses `std::jthread` for background swap operations and Linux futex for cross-process synchronization. Works on x86_64 and ARM64.
+Header-only C++23 library. Uses sequence counters (seqlock) for near-zero-overhead reads, `std::jthread` for background swap operations, and Linux futex for cross-process synchronization. Works on x86_64 and ARM64.
 
 ## Dependencies
 
@@ -24,6 +24,7 @@ Header-only C++23 library. Uses `std::jthread` for background swap operations an
 | `dblbuf_loader.hpp` | `DblBufLoader<T>` | Double-buffered async reader |
 | `image_shm.hpp` | `DoubleBufferShm<T>` | Combined reader/writer with double buffering |
 | `image.hpp` | `Image<W,H,TYPE>` | Compile-time image types (FHD/4K, RGB/RGBA/NV12) |
+| `seqlock.hpp` | `SeqlockWriter<T>`, `SeqlockReader<T>`, `Seqlock<T>` | Lock-free seqlock (near-zero overhead) |
 | `shared_memory.hpp` | `SharedMemory<T>` | Simple typed shm wrapper (no sync) |
 | `producer_consumer.hpp` | `ProducerConsumer<T>` | Semaphore-based producer/consumer |
 
@@ -54,6 +55,34 @@ Writer (process A)                    Reader (process B)
 **ShmLock** uses Linux futex on shared memory (`FUTEX_WAIT`/`FUTEX_WAKE`, not `_PRIVATE`) for cross-process locking. Uncontended lock is a single `atomic_ref::exchange` — no syscall. Only enters kernel when contended.
 
 **SwapRunner** uses `std::atomic<uint32_t>::wait()`/`notify_one()` instead of mutex + condition_variable, eliminating per-cycle mutex overhead.
+
+### Seqlock (lock-free fast path)
+
+```
+Writer                                  Reader
+┌────────────────────┐                 ┌────────────────────┐
+│ seq++ (odd)        │                 │ read seq (acquire)  │
+│ memcpy data        │  /dev/shm/name  │ memcpy data         │
+│ seq++ (even)       ├────────────────►│ read seq (acquire)  │
+│ futex_wake         │                 │ if changed → retry  │
+└────────────────────┘                 └────────────────────┘
+```
+
+- **Zero extra copies**: reader copies directly from shm (no intermediate buffer)
+- **No mutex**: sequence counter detects torn reads, retry is rare
+- **No background thread**: no `SwapRunner`, no `jthread`
+- **Blocking mode**: `load_blocking()` uses raw futex to sleep until writer publishes
+
+Use `Seqlock<T>` for same-process, `SeqlockWriter<T>` + `SeqlockReader<T>` for cross-process.
+
+## Choosing a transport
+
+| Need | Use |
+|------|-----|
+| Maximum throughput, single writer | `Seqlock<T>` / `SeqlockWriter<T>` + `SeqlockReader<T>` |
+| Double-buffered async loading | `DoubleBufferShm<T>` / `Storage<T>` + `DblBufLoader<T>` |
+| Simple typed shm (no sync) | `SharedMemory<T>` |
+| Producer/consumer queue | `ProducerConsumer<T>` |
 
 ## Example
 
@@ -90,6 +119,25 @@ shm.store(frame);
 auto snap = shm.load();
 shm.wait();
 assert(snap->timestamp == 1000);
+```
+
+```cpp
+// Lock-free seqlock (fastest, single writer)
+#include "safe-shm/seqlock.hpp"
+
+// Same process
+safe_shm::Seqlock<int> sl("my_seqlock");
+sl.store(42);
+assert(sl.load() == 42);
+
+// Cross-process: writer
+safe_shm::SeqlockWriter<int> writer("my_seqlock");
+writer.store(42);
+
+// Cross-process: reader (blocking)
+safe_shm::SeqlockReader<int> reader("my_seqlock");
+uint32_t last_seq = 0;
+int val = reader.load_blocking(last_seq); // sleeps until new data
 ```
 
 ## Build
@@ -133,6 +181,7 @@ docker run --rm -v $(pwd):/src safe-shm-test bash -c \
 | `shared_memory_test` | Integration | SharedMemory typed wrapper |
 | `image_shm_test` | Integration | DoubleBufferShm with FHD images |
 | `integration_test` | Integration | Cross-process (fork) all components |
+| `seqlock_test` | Integration | Seqlock store/load, cross-process, concurrent, blocking |
 
 ## Benchmarks
 
@@ -142,13 +191,14 @@ Run: `./benchmark` (built with `-O3 -DNDEBUG`, uses [nanobench](https://github.c
 |--------|----------------|--------------------------|
 | memcpy (baseline) | 25.2 GB/s | 19.6 GB/s |
 | raw POSIX shm (no sync) | 25.6 GB/s | 19.5 GB/s |
+| **Seqlock (lock-free)** | **8.0 GB/s** | **22.4 GB/s** |
 | SharedMemory (no sync) | 11.2 GB/s | - |
 | DoubleBufferShm (futex) | 5.3 GB/s | 6.2 GB/s |
 | pipe (kernel IPC) | 6.0 GB/s | - |
 
-- **SharedMemory**: zero overhead vs raw POSIX shm
+- **Seqlock**: 22.4 GB/s for FHD images — matches raw POSIX shm with full consistency guarantees
 - **DoubleBufferShm**: 6.2 GB/s for FHD images (2.8x faster than POSIX semaphore version)
-- **Comparable to pipe** at large payloads, with cross-process safety and double buffering
+- **Seqlock vs DoubleBufferShm**: 2.9x faster at FHD — no background thread, no extra memcpy
 
 ## License
 
