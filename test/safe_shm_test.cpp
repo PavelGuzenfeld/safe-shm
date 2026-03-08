@@ -2,7 +2,6 @@
 #include <doctest/doctest.h>
 #include "safe-shm/dblbuf_loader.hpp"
 #include "safe-shm/storage.hpp"
-#include <fmt/core.h>
 
 TEST_CASE("store and load round-trip")
 {
