@@ -151,6 +151,7 @@ add_integration_test(safe_shm_test test/safe_shm_test.cpp)
 add_integration_test(shared_memory_test test/shared_memory_test.cpp)
 add_integration_test(image_shm_test test/image_shm_test.cpp)
 add_integration_test(integration_test test/integration_test.cpp)
+add_integration_test(seqlock_test test/seqlock_test.cpp)
 
 # Benchmarks (nanobench, always built with -O3, no sanitizers)
 FetchContent_Declare(
