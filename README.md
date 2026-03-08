@@ -2,7 +2,7 @@
 
 Thread-safe shared memory with double-buffered loading for lock-free reads.
 
-Consolidates `flat-type`, `double-buffer-swapper`, `single-task-runner`, and `image-shm-dblbuf` into a single header-only C++23 library. Uses `std::jthread` for background swap operations.
+Header-only C++23 library. Uses `std::jthread` for background swap operations and Linux futex for cross-process synchronization. Works on x86_64 and ARM64.
 
 ## Dependencies
 
@@ -17,9 +17,10 @@ Consolidates `flat-type`, `double-buffer-swapper`, `single-task-runner`, and `im
 |--------|-------|-------------|
 | `flat_type.hpp` | `FlatType` | Concept: trivially copyable + standard layout |
 | `snapshot.hpp` | `Snapshot<T>` | Atomic acquire-semantics read handle |
+| `shm_lock.hpp` | `ShmLock` | Cross-process futex mutex on shared memory |
 | `double_buffer_swapper.hpp` | `DoubleBufferSwapper<T>` | Low-level buffer swap (memcpy to pre-allocated) |
-| `swap_runner.hpp` | `SwapRunner` | Background `std::jthread` with trigger/wait |
-| `storage.hpp` | `Storage<T>` | Write-side shared memory (semaphore-protected) |
+| `swap_runner.hpp` | `SwapRunner` | Background `std::jthread` with atomic trigger/wait |
+| `storage.hpp` | `Storage<T>` | Write-side shared memory (futex-locked) |
 | `dblbuf_loader.hpp` | `DblBufLoader<T>` | Double-buffered async reader |
 | `image_shm.hpp` | `DoubleBufferShm<T>` | Combined reader/writer with double buffering |
 | `image.hpp` | `Image<W,H,TYPE>` | Compile-time image types (FHD/4K, RGB/RGBA/NV12) |
@@ -34,19 +35,25 @@ Writer (process A)                    Reader (process B)
 │  Storage<T>  │                     │    DblBufLoader<T>       │
 │              │    /dev/shm/name    │                          │
 │  store(data) ├───────────────────► │  load() → Snapshot<T>   │
-│  [sem.wait]  │                     │  [stages shm pointer]   │
+│  [futex lock]│                     │  [stages shm pointer]   │
 │  [memcpy]    │                     │  [triggers SwapRunner]  │
-│  [sem.post]  │                     │                          │
+│  [futex unlock]                    │                          │
 └──────────────┘                     │  SwapRunner (jthread)   │
-                                     │  [sem.wait]             │
+                                     │  [futex lock]           │
                                      │  [swap to pre-alloc]    │
                                      │  [atomic publish]       │
-                                     │  [sem.post]             │
+                                     │  [futex unlock]         │
                                      │                          │
                                      │  wait() → done          │
                                      │  *snapshot → data        │
                                      └──────────────────────────┘
 ```
+
+### Synchronization
+
+**ShmLock** uses Linux futex on shared memory (`FUTEX_WAIT`/`FUTEX_WAKE`, not `_PRIVATE`) for cross-process locking. Uncontended lock is a single `atomic_ref::exchange` — no syscall. Only enters kernel when contended.
+
+**SwapRunner** uses `std::atomic<uint32_t>::wait()`/`notify_one()` instead of mutex + condition_variable, eliminating per-cycle mutex overhead.
 
 ## Example
 
@@ -129,19 +136,19 @@ docker run --rm -v $(pwd):/src safe-shm-test bash -c \
 
 ## Benchmarks
 
-Run: `./benchmark` (built with `-O3 -DNDEBUG`, no sanitizers)
+Run: `./benchmark` (built with `-O3 -DNDEBUG`, uses [nanobench](https://github.com/martinus/nanobench))
 
-| Method | 64 B | 4 KB | 1 MB | 6 MB (FHD) |
-|--------|------|------|------|------------|
-| memcpy (baseline) | 0.0 us | 0.1 us | 78 us | 1057 us |
-| raw POSIX shm | 0.0 us | 0.1 us | 82 us | 1051 us |
-| SharedMemory | 0.0 us | 0.1 us | 80 us | - |
-| DoubleBufferShm | 6.8 us | 7.1 us | 208 us | 2755 us |
-| pipe (kernel IPC) | 0.9 us | 1.0 us | 437 us | - |
+| Method | 1 MB throughput | FHD RGB (6 MB) throughput |
+|--------|----------------|--------------------------|
+| memcpy (baseline) | 25.2 GB/s | 19.6 GB/s |
+| raw POSIX shm (no sync) | 25.6 GB/s | 19.5 GB/s |
+| SharedMemory (no sync) | 11.2 GB/s | - |
+| DoubleBufferShm (futex) | 5.3 GB/s | 6.2 GB/s |
+| pipe (kernel IPC) | 6.0 GB/s | - |
 
 - **SharedMemory**: zero overhead vs raw POSIX shm
-- **DoubleBufferShm**: ~7us fixed cost (semaphore + thread wake), 2.1 GB/s at FHD
-- **2-5x faster than pipe** at all payload sizes
+- **DoubleBufferShm**: 6.2 GB/s for FHD images (2.8x faster than POSIX semaphore version)
+- **Comparable to pipe** at large payloads, with cross-process safety and double buffering
 
 ## License
 
