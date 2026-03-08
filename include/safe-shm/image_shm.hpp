@@ -1,11 +1,10 @@
 #pragma once
-#include "safe-shm/config.hpp"
 #include "safe-shm/double_buffer_swapper.hpp"
 #include "safe-shm/flat_type.hpp"
+#include "safe-shm/logger.hpp"
+#include "safe-shm/shm_lock.hpp"
 #include "safe-shm/snapshot.hpp"
 #include "safe-shm/swap_runner.hpp"
-#include "safe-shm/logger.hpp"
-#include "shm/semaphore.hpp"
 #include "shm/shm.hpp"
 #include <atomic>
 #include <cassert>
@@ -20,7 +19,7 @@ namespace safe_shm
         explicit DoubleBufferShm(std::string const &shm_name,
                                  void (*log)(std::string_view) = default_logger)
             : shm_(shm::path(shm_name), sizeof(T)),
-              sem_(shm_name + SEM_SUFFIX, SEM_INIT),
+              lock_(shm_name + "_lock"),
               pre_allocated_(std::make_unique<T>()),
               swapper_ptr_(nullptr),
               published_ptr_(nullptr),
@@ -28,10 +27,10 @@ namespace safe_shm
               runner_(std::make_unique<SwapRunner>(
                   [this]
                   {
-                      sem_.wait();
+                      lock_.lock();
                       swapper_.swap();
                       published_ptr_.store(swapper_ptr_, std::memory_order_release);
-                      sem_.post();
+                      lock_.unlock();
                   },
                   [log](std::string_view msg)
                   { log(msg); }))
@@ -43,7 +42,7 @@ namespace safe_shm
         ~DoubleBufferShm()
         {
             runner_.reset();
-            sem_.destroy();
+            lock_.destroy();
         }
 
         DoubleBufferShm(DoubleBufferShm const &) = delete;
@@ -53,9 +52,9 @@ namespace safe_shm
 
         void store(T const &data)
         {
-            sem_.wait();
+            lock_.lock();
             *get_shm() = data;
-            sem_.post();
+            lock_.unlock();
         }
 
         Snapshot<T> load()
@@ -82,7 +81,7 @@ namespace safe_shm
         }
 
         shm::Shm shm_;
-        shm::Semaphore sem_;
+        ShmLock lock_;
         std::unique_ptr<T> pre_allocated_;
         T *swapper_ptr_;
         std::atomic<T *> published_ptr_;
