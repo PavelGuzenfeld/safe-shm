@@ -6,11 +6,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /deps
 
-# Install cmake-library (build utilities used by shm and exception-rt)
-RUN git clone --depth 1 https://github.com/PavelGuzenfeld/cmake-library.git \
-    && cd cmake-library && mkdir build && cd build \
-    && cmake .. && make install
-
 # Install exception-rt
 RUN git clone --depth 1 https://github.com/PavelGuzenfeld/exception-rt.git \
     && cd exception-rt && mkdir build && cd build \
