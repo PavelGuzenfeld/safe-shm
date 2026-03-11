@@ -7,36 +7,56 @@ on:
 
 jobs:
   build:
-    name: ${{ matrix.compiler }} / ${{ matrix.sanitizer }}
-    runs-on: ubuntu-latest
+    name: ${{ matrix.compiler }} / ${{ matrix.sanitizer }} / ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
+          # x86_64
           - compiler: gcc-13
             cc: gcc-13
             cxx: g++-13
             sanitizer: asan
+            arch: x86_64
+            runner: ubuntu-latest
           - compiler: gcc-13
             cc: gcc-13
             cxx: g++-13
             sanitizer: tsan
+            arch: x86_64
+            runner: ubuntu-latest
           - compiler: gcc-13
             cc: gcc-13
             cxx: g++-13
             sanitizer: none
+            arch: x86_64
+            runner: ubuntu-latest
           - compiler: clang-17
             cc: clang-17
             cxx: clang++-17
             sanitizer: asan
+            arch: x86_64
+            runner: ubuntu-latest
           - compiler: clang-17
             cc: clang-17
             cxx: clang++-17
             sanitizer: tsan
+            arch: x86_64
+            runner: ubuntu-latest
           - compiler: clang-17
             cc: clang-17
             cxx: clang++-17
             sanitizer: none
+            arch: x86_64
+            runner: ubuntu-latest
+          # ARM64
+          - compiler: gcc
+            cc: gcc
+            cxx: g++
+            sanitizer: none
+            arch: arm64
+            runner: ubuntu-24.04-arm
 
     steps:
       - uses: actions/checkout@v4
@@ -53,7 +73,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /usr/local
-          key: deps-${{ runner.os }}-${{ matrix.compiler }}-v1
+          key: deps-${{ runner.os }}-${{ matrix.arch }}-${{ matrix.compiler }}-v1
 
       - name: Build and install exception-rt
         if: steps.cache-deps.outputs.cache-hit != 'true'
@@ -153,7 +173,7 @@ jobs:
             -DSANITIZER=fuzzer
 
       - name: Build fuzz targets
-        run: cmake --build build -j$(nproc)
+        run: cmake --build build --target fuzz_cyclic_buffer fuzz_time_series -j$(nproc)
 
       - name: Run fuzzers (30s each)
         run: |

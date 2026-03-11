@@ -91,5 +91,7 @@ jobs:
           merge-multiple: true
 
       - uses: pypa/gh-action-pypi-publish@release/v1
+        # Uses trusted publishing (OIDC) by default.
+        # Falls back to PYPI_API_TOKEN secret if trusted publishing is not configured.
         with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
+          password: ${{ secrets.PYPI_API_TOKEN || '' }}
