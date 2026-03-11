@@ -13,17 +13,28 @@ jobs:
         include:
           - distro: jammy
             image: ubuntu:22.04
+            extra_ppa: true
           - distro: noble
             image: ubuntu:24.04
+            extra_ppa: false
     runs-on: ubuntu-latest
     container:
       image: ${{ matrix.image }}
+    env:
+      CC: gcc-13
+      CXX: g++-13
     steps:
       - name: Install build dependencies
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            cmake g++ libfmt-dev debhelper devscripts git ca-certificates
+            cmake g++ libfmt-dev debhelper devscripts git ca-certificates \
+            software-properties-common
+          if [ "${{ matrix.extra_ppa }}" = "true" ]; then
+            add-apt-repository -y ppa:ubuntu-toolchain-r/test
+            apt-get update
+          fi
+          apt-get install -y --no-install-recommends g++-13
 
       - name: Checkout
         uses: actions/checkout@v4
