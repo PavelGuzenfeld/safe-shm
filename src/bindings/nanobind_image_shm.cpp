@@ -4,6 +4,8 @@
 #include "nanobind/ndarray.h"
 #include "nanobind/stl/shared_ptr.h"
 #include "nanobind/stl/string.h"
+#include <shm/semaphore.hpp>
+#include <shm/shm.hpp>
 #include <cstring>
 #include <fmt/core.h>
 
