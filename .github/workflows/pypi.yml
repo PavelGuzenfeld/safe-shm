@@ -31,12 +31,11 @@ jobs:
           CIBW_BUILD: "cp39-manylinux* cp310-manylinux* cp311-manylinux* cp312-manylinux* cp313-manylinux*"
           CIBW_SKIP: "*-musllinux*"
           CIBW_ARCHS_LINUX: "x86_64 aarch64"
-          CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
-          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux2014
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
+          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
           CIBW_BEFORE_ALL_LINUX: >-
-            yum install -y fmt-devel ||
-            (apt-get update && apt-get install -y libfmt-dev) ||
-            true &&
+            yum install -y gcc-toolset-13-gcc-c++ cmake git &&
+            source /opt/rh/gcc-toolset-13/enable &&
             git clone --depth 1 --branch 10.2.1 https://github.com/fmtlib/fmt.git /tmp/fmt &&
             cd /tmp/fmt && mkdir build && cd build &&
             cmake .. -DCMAKE_BUILD_TYPE=Release -DFMT_TEST=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON &&
@@ -50,6 +49,11 @@ jobs:
             mkdir build && cd build &&
             cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON &&
             make -j$(nproc) && make install
+          CIBW_ENVIRONMENT_LINUX: >-
+            PATH=/opt/rh/gcc-toolset-13/root/usr/bin:$PATH
+            LD_LIBRARY_PATH=/opt/rh/gcc-toolset-13/root/usr/lib64:/opt/rh/gcc-toolset-13/root/usr/lib:${LD_LIBRARY_PATH:-}
+            CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc
+            CXX=/opt/rh/gcc-toolset-13/root/usr/bin/g++
 
       - uses: actions/upload-artifact@v4
         with:
