@@ -115,13 +115,15 @@ TEST_CASE("concurrent triggers from multiple threads")
     threads.reserve(THREADS);
     for (int t = 0; t < THREADS; ++t)
     {
-        threads.emplace_back([&runner]
-                             {
+        auto fn = [&runner]
+        {
             for (int i = 0; i < PER_THREAD; ++i)
             {
                 runner.trigger();
                 runner.wait();
-            } });
+            }
+        };
+        threads.push_back(std::thread(fn));
     }
     for (auto &th : threads)
         th.join();
