@@ -2,7 +2,7 @@ Source: safe-shm
 Section: libs
 Priority: optional
 Maintainer: Pavel Guzenfeld <pavel@guzenfeld.dev>
-Build-Depends: debhelper-compat (= 13), cmake (>= 3.20), g++ (>= 13), libfmt-dev
+Build-Depends: debhelper-compat (= 13), build-essential, cmake (>= 3.20), g++ (>= 13), libfmt-dev
 Standards-Version: 4.6.0
 Homepage: https://github.com/PavelGuzenfeld/safe-shm
 
