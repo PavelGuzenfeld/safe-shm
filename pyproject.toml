@@ -26,5 +26,5 @@ Repository = "https://github.com/PavelGuzenfeld/safe-shm"
 
 [tool.scikit-build]
 cmake.build-type = "Release"
-cmake.args = ["-DSANITIZER=none"]
+cmake.args = ["-DSANITIZER=none", "-DSAFE_SHM_BUILD_TESTS=OFF"]
 wheel.packages = []
