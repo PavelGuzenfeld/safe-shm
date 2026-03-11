@@ -11,7 +11,15 @@
 #include <unistd.h>
 
 // Reuse the TSan suppression macro from seqlock.hpp
-#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer))
+#if defined(__SANITIZE_THREAD__)
+#define SAFE_SHM_CB_TSAN_ACTIVE 1
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define SAFE_SHM_CB_TSAN_ACTIVE 1
+#endif
+#endif
+
+#ifdef SAFE_SHM_CB_TSAN_ACTIVE
 #define SAFE_SHM_CB_NO_TSAN __attribute__((no_sanitize("thread")))
 #else
 #define SAFE_SHM_CB_NO_TSAN
