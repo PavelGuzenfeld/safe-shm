@@ -1,0 +1,9 @@
+#!/usr/bin/make -f
+%:
+	dh $@
+
+override_dh_auto_configure:
+	dh_auto_configure -- -DSANITIZER=none -DCMAKE_BUILD_TYPE=Release
+
+override_dh_auto_test:
+	cd obj-* && ctest --output-on-failure -E "benchmark"
