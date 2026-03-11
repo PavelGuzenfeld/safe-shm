@@ -28,8 +28,8 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            cmake g++ libfmt-dev debhelper devscripts git ca-certificates \
-            software-properties-common
+            build-essential cmake g++ libfmt-dev debhelper devscripts git \
+            ca-certificates software-properties-common
           if [ "${{ matrix.extra_ppa }}" = "true" ]; then
             add-apt-repository -y ppa:ubuntu-toolchain-r/test
             apt-get update
