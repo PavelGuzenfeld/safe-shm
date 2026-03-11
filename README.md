@@ -1,8 +1,10 @@
 # safe-shm
 
-Thread-safe shared memory with lock-free seqlock and double-buffered loading.
+Lock-free shared memory primitives for real-time C++ and Python.
 
-Header-only C++23 library. Uses sequence counters (seqlock) for near-zero-overhead reads, `std::jthread` for background swap operations, and Linux futex for cross-process synchronization. Works on x86_64 and ARM64.
+Header-only C++23 library providing seqlock, cyclic ring buffer, time-series temporal queries, and lifecycle management — all over POSIX shared memory with zero-copy cross-process communication. Uses Linux futex for blocking waits, `std::atomic_ref` for lock-free access, and per-slot seqlocks to eliminate contention.
+
+Works on x86_64 and ARM64 Linux.
 
 ## Dependencies
 
@@ -10,53 +12,38 @@ Header-only C++23 library. Uses sequence counters (seqlock) for near-zero-overhe
 - [`exception-rt`](https://github.com/PavelGuzenfeld/exception-rt) — runtime exception utilities
 - [`fmt`](https://github.com/fmtlib/fmt) — formatting
 - [`nanobind`](https://github.com/wjakob/nanobind) (optional) — Python bindings
+- [`doctest`](https://github.com/doctest/doctest) (test only) — fetched automatically
+- [`nanobench`](https://github.com/martinus/nanobench) (bench only) — fetched automatically
 
 ## Components
 
+### Core Primitives
+
 | Header | Class | Description |
 |--------|-------|-------------|
-| `flat_type.hpp` | `FlatType` | Concept: trivially copyable + standard layout |
-| `snapshot.hpp` | `Snapshot<T>` | Atomic acquire-semantics read handle |
-| `shm_lock.hpp` | `ShmLock` | Cross-process futex mutex on shared memory |
-| `double_buffer_swapper.hpp` | `DoubleBufferSwapper<T>` | Low-level buffer swap (memcpy to pre-allocated) |
-| `swap_runner.hpp` | `SwapRunner` | Background `std::jthread` with atomic trigger/wait |
+| `flat_type.hpp` | `FlatType` | Concept: `trivially_copyable && standard_layout` |
+| `seqlock.hpp` | `SeqlockWriter<T>`, `SeqlockReader<T>` | Lock-free single-value read/write with torn-read detection |
+| `cyclic_buffer.hpp` | `CyclicBufferWriter<T,N>`, `CyclicBufferReader<T,N>` | Lock-free ring buffer with per-slot seqlock |
+| `time_series.hpp` | `TimeSeries<T,N>` | Temporal queries on cyclic buffer (closest, interpolation, freshness) |
+| `stamped.hpp` | `Stamped<T>` | Metadata envelope: `{timestamp_ns, sequence, data}` |
+| `sanitized_key.hpp` | `SanitizedKey<Tag>` | Strong-typed temporal key with external validator (opt-in) |
+| `shm_lifecycle.hpp` | `OwnedShm<T>`, `ShmHeader` | RAII ownership, heartbeat liveness, cleanup utilities |
+
+### Legacy / Specialized
+
+| Header | Class | Description |
+|--------|-------|-------------|
 | `storage.hpp` | `Storage<T>` | Write-side shared memory (futex-locked) |
-| `dblbuf_loader.hpp` | `DblBufLoader<T>` | Double-buffered async reader |
+| `dblbuf_loader.hpp` | `DblBufLoader<T>` | Double-buffered async reader with background `jthread` |
 | `image_shm.hpp` | `DoubleBufferShm<T>` | Combined reader/writer with double buffering |
 | `image.hpp` | `Image<W,H,TYPE>` | Compile-time image types (FHD/4K, RGB/RGBA/NV12) |
-| `seqlock.hpp` | `SeqlockWriter<T>`, `SeqlockReader<T>`, `Seqlock<T>` | Lock-free seqlock (near-zero overhead) |
 | `shared_memory.hpp` | `SharedMemory<T>` | Simple typed shm wrapper (no sync) |
 | `producer_consumer.hpp` | `ProducerConsumer<T>` | Semaphore-based producer/consumer |
+| `shm_stats.hpp` | `ShmStats` | Diagnostic counters with zero-cost opt-out via `[[no_unique_address]]` |
 
 ## Architecture
 
-```
-Writer (process A)                    Reader (process B)
-┌──────────────┐                     ┌──────────────────────────┐
-│  Storage<T>  │                     │    DblBufLoader<T>       │
-│              │    /dev/shm/name    │                          │
-│  store(data) ├───────────────────► │  load() → Snapshot<T>   │
-│  [futex lock]│                     │  [stages shm pointer]   │
-│  [memcpy]    │                     │  [triggers SwapRunner]  │
-│  [futex unlock]                    │                          │
-└──────────────┘                     │  SwapRunner (jthread)   │
-                                     │  [futex lock]           │
-                                     │  [swap to pre-alloc]    │
-                                     │  [atomic publish]       │
-                                     │  [futex unlock]         │
-                                     │                          │
-                                     │  wait() → done          │
-                                     │  *snapshot → data        │
-                                     └──────────────────────────┘
-```
-
-### Synchronization
-
-**ShmLock** uses Linux futex on shared memory (`FUTEX_WAIT`/`FUTEX_WAKE`, not `_PRIVATE`) for cross-process locking. Uncontended lock is a single `atomic_ref::exchange` — no syscall. Only enters kernel when contended.
-
-**SwapRunner** uses `std::atomic<uint32_t>::wait()`/`notify_one()` instead of mutex + condition_variable, eliminating per-cycle mutex overhead.
-
-### Seqlock (lock-free fast path)
+### Seqlock (single value, lock-free)
 
 ```
 Writer                                  Reader
@@ -68,77 +55,188 @@ Writer                                  Reader
 └────────────────────┘                 └────────────────────┘
 ```
 
-- **Zero extra copies**: reader copies directly from shm (no intermediate buffer)
-- **No mutex**: sequence counter detects torn reads, retry is rare
-- **No background thread**: no `SwapRunner`, no `jthread`
-- **Blocking mode**: `load_blocking()` uses raw futex to sleep until writer publishes
+### CyclicBuffer (ring buffer, per-slot seqlock)
 
-Use `Seqlock<T>` for same-process, `SeqlockWriter<T>` + `SeqlockReader<T>` for cross-process.
-
-## Choosing a transport
-
-| Need | Use |
-|------|-----|
-| Maximum throughput, single writer | `Seqlock<T>` / `SeqlockWriter<T>` + `SeqlockReader<T>` |
-| Double-buffered async loading | `DoubleBufferShm<T>` / `Storage<T>` + `DblBufLoader<T>` |
-| Simple typed shm (no sync) | `SharedMemory<T>` |
-| Producer/consumer queue | `ProducerConsumer<T>` |
-
-## Example
-
-```cpp
-// Writer process
-#include "safe-shm/storage.hpp"
-
-safe_shm::Storage<int> storage("my_shm");
-storage.store(42);
+```
+Writer                                     Reader
+┌──────────────────────┐                  ┌──────────────────────────┐
+│ idx = writes & (N-1) │                  │ get_latest()             │
+│ slot[idx].seq++ (odd)│  /dev/shm/name   │ get(reverse_index)       │
+│ memcpy slot[idx].data├─────────────────►│ try_get() → optional<T>  │
+│ slot[idx].seq++ (even│                  │ wait_for_write() [futex] │
+│ total_writes++       │                  │                          │
+│ futex_wake           │                  │ TimeSeries layer:        │
+└──────────────────────┘                  │  find_closest(key)       │
+                                          │  find_interpolation_pair │
+  SHM layout:                             │  get_latest_if_fresh     │
+  [total_writes] [slot₀] [slot₁] .. [slotₙ₋₁]                      │
+  Each slot: [seq_counter | T data]       └──────────────────────────┘
 ```
 
-```cpp
-// Reader process
-#include "safe-shm/dblbuf_loader.hpp"
+### Lifecycle Management
 
-safe_shm::DblBufLoader<int> loader("my_shm");
-auto snapshot = loader.load();
-loader.wait();
-assert(*snapshot == 42);
+```
+OwnedShm<T>
+┌──────────────────────────────────┐
+│ ShmHeader (32 bytes)             │
+│   magic: 0x53484D48             │
+│   version, heartbeat_ns         │
+│   writer_pid                     │
+├──────────────────────────────────┤
+│ T data (user payload)            │
+└──────────────────────────────────┘
+  RAII: unlinks /dev/shm on destruction
+  is_writer_alive(): PID check + heartbeat
 ```
 
-```cpp
-// Combined reader/writer (e.g., image pipeline)
-#include "safe-shm/image_shm.hpp"
-#include "safe-shm/image.hpp"
+## Choosing a Transport
 
-using Image = safe_shm::img::ImageFHD_RGB;
-safe_shm::DoubleBufferShm<Image> shm("camera_feed");
+| Need | Use | Latency |
+|------|-----|---------|
+| Single latest value, maximum speed | `Seqlock<T>` | ~140 ns (64 B) |
+| Ring buffer history + temporal queries | `CyclicBuffer<T,N>` + `TimeSeries` | ~45 ns lookup |
+| Double-buffered async loading (images) | `DoubleBufferShm<T>` | ~1 µs (FHD) |
+| SHM with ownership tracking | `OwnedShm<T>` | — |
+| Simple typed shm (no sync) | `SharedMemory<T>` | ~1 ns |
 
-Image frame{};
-frame.timestamp = 1000;
-shm.store(frame);
+## Quick Start
 
-auto snap = shm.load();
-shm.wait();
-assert(snap->timestamp == 1000);
-```
+### Seqlock (cross-process, lock-free)
 
 ```cpp
-// Lock-free seqlock (fastest, single writer)
 #include "safe-shm/seqlock.hpp"
 
-// Same process
-safe_shm::Seqlock<int> sl("my_seqlock");
-sl.store(42);
-assert(sl.load() == 42);
+// Writer process
+safe_shm::SeqlockWriter<SensorData> writer("sensor_shm");
+writer.store(SensorData{20.5, 1013.25, 45.0, now_ms()});
 
-// Cross-process: writer
-safe_shm::SeqlockWriter<int> writer("my_seqlock");
-writer.store(42);
-
-// Cross-process: reader (blocking)
-safe_shm::SeqlockReader<int> reader("my_seqlock");
-uint32_t last_seq = 0;
-int val = reader.load_blocking(last_seq); // sleeps until new data
+// Reader process
+safe_shm::SeqlockReader<SensorData> reader("sensor_shm");
+auto data = reader.load();                              // non-blocking
+auto data2 = reader.load_blocking(last_seq, timeout);   // blocks until new data
 ```
+
+### CyclicBuffer + TimeSeries (ring buffer with temporal queries)
+
+```cpp
+#include "safe-shm/cyclic_buffer.hpp"
+#include "safe-shm/stamped.hpp"
+#include "safe-shm/time_series.hpp"
+
+using StampedIMU = safe_shm::Stamped<IMUReading>;
+
+// Writer: insert stamped readings at 200 Hz
+safe_shm::CyclicBufferWriter<StampedIMU, 64> writer("imu_shm");
+writer.insert(safe_shm::stamp(imu_reading, seq++));
+
+// Reader: temporal queries
+safe_shm::TimeSeries<StampedIMU, 64> ts("imu_shm");
+
+auto latest = ts.get_latest();
+auto closest = ts.find_closest(target_ns);           // binary search O(log N)
+auto closest = ts.find_closest(target_ns, 100'000);  // with max_distance guard
+auto interp = ts.find_interpolation_pair(target_ns);  // {before, after, alpha}
+auto fresh = ts.get_latest_if_fresh(min_timestamp);    // staleness check
+```
+
+### Lifecycle Management
+
+```cpp
+#include "safe-shm/shm_lifecycle.hpp"
+
+// RAII-managed SHM segment with header
+safe_shm::OwnedShm<Config> owned("my_config");
+owned.data() = {1.5, 0.0, 3};
+owned.update_heartbeat();
+
+// Remote liveness check
+if (safe_shm::is_writer_alive(header, /*max_stale_ns=*/1'000'000'000))
+    fmt::print("Writer is alive\n");
+
+// Cleanup utilities
+for (auto const& seg : safe_shm::shm_list("stale_"))
+    safe_shm::shm_remove(seg);
+```
+
+### Python Bindings
+
+```python
+import safe_shm_py as shm
+
+# Seqlock
+writer = shm.SeqlockWriterF64("my_shm")
+writer.store(3.14159)
+
+reader = shm.SeqlockReaderF64("my_shm")
+value = reader.load()  # 3.14159
+
+# CyclicBuffer + TimeSeries
+cb_writer = shm.CyclicBufferWriterStampedF64("ring_shm")
+s = shm.StampedF64()
+s.timestamp_ns = shm.monotonic_now_ns()
+s.sequence = 0
+s.data = 42.0
+cb_writer.insert(s)
+
+ts = shm.TimeSeriesStampedF64("ring_shm")
+closest = ts.find_closest(target_ns)
+interp = ts.find_interpolation_pair(target_ns)
+```
+
+## Temporal Query Safety
+
+Two layers of protection against unit/clock-type mismatches:
+
+### Layer 1: Runtime — `max_distance` parameter
+
+```cpp
+// BUG: querying with milliseconds (5000) instead of nanoseconds
+auto bad = ts.find_closest(5000);               // silently returns oldest element
+auto bad = ts.find_closest(5000, 100'000'000);  // returns nullopt — mismatch caught!
+
+// CORRECT: consistent nanosecond units
+auto good = ts.find_closest(5'000'000'000, 100'000'000);  // works, within 100ms
+```
+
+### Layer 2: Compile-time — `SanitizedKey<Tag>` (opt-in)
+
+`SanitizedKey<Tag>` is a strong type that can only be created through an external validator function. The compiler prevents passing raw `uint64_t` where `SanitizedKey` is expected.
+
+```cpp
+#include "safe-shm/sanitized_key.hpp"
+
+// Step 1: Sanitize — the ONLY way to create a SanitizedKey
+auto key = safe_shm::sanitize<safe_shm::MonotonicNsTag>(
+    raw_ns, safe_shm::MonotonicNsValidator{});
+
+if (!key) { /* rejected: wrong units or clock type */ }
+
+// Step 2: Pass to TimeSeries — type-safe overload
+auto result = ts.find_closest(*key);
+auto interp = ts.find_interpolation_pair(*key);
+auto fresh  = ts.get_latest_if_fresh(*key);
+```
+
+Built-in validators:
+
+| Validator | Catches |
+|-----------|---------|
+| `MonotonicNsValidator{}` | Values that aren't plausible `CLOCK_MONOTONIC` nanoseconds |
+| `RangeValidator{min, max}` | Values outside expected range |
+| `ProximityValidator{ref, tol}` | Values differing from reference by > tolerance |
+| `AllOf(v1, v2, ...)` | Composes validators with AND logic |
+
+Different `Tag` types make different sanitization policies type-incompatible at compile time — `SanitizedKey<MonotonicNsTag>` cannot be passed where `SanitizedKey<RangeCheckedTag>` is expected.
+
+Custom validators are just callables:
+
+```cpp
+auto key = safe_shm::sanitize<MyTag>(raw_ns, [latest_ts](uint64_t v) {
+    return (v > latest_ts ? v - latest_ts : latest_ts - v) <= 2'000'000'000ULL;
+});
+```
+
+The raw `uint64_t` API is unchanged — `SanitizedKey` is purely opt-in.
 
 ## Build
 
@@ -152,14 +250,19 @@ ctest
 ### Sanitizers
 
 ```bash
-# Address + UB sanitizer (default)
-cmake .. -DSANITIZER=asan
+cmake .. -DSANITIZER=asan    # Address + UB (default)
+cmake .. -DSANITIZER=tsan    # Thread sanitizer
+cmake .. -DSANITIZER=none    # No sanitizer
+```
 
-# Thread sanitizer
-cmake .. -DSANITIZER=tsan
+### Fuzz Testing
 
-# No sanitizer
-cmake .. -DSANITIZER=none
+```bash
+# Requires clang
+CC=clang CXX=clang++ cmake .. -DSANITIZER=fuzzer
+make fuzz_cyclic_buffer fuzz_time_series
+./fuzz_cyclic_buffer corpus_cyclic/ -max_total_time=60
+./fuzz_time_series corpus_ts/ -max_total_time=60
 ```
 
 ### Docker (CI)
@@ -170,42 +273,91 @@ docker run --rm -v $(pwd):/src safe-shm-test bash -c \
   "cd /tmp && cmake /src -DSANITIZER=none && make -j\$(nproc) && ctest"
 ```
 
+## Examples
+
+All examples are buildable targets — see `examples/` directory.
+
+| Example | Language | What it demonstrates |
+|---------|----------|---------------------|
+| `seqlock_example` | C++ | Cross-process writer/reader with blocking reads |
+| `cyclic_buffer_example` | C++ | Ring buffer + Stamped<T> + TimeSeries temporal queries |
+| `lifecycle_example` | C++ | OwnedShm RAII, heartbeat, cleanup utilities |
+| `python_seqlock.py` | Python | Seqlock read/write + Stamped + monotonic clock |
+| `python_cyclic_buffer.py` | Python | CyclicBuffer + TimeSeries from Python |
+
+```bash
+# C++ examples (two terminals)
+./seqlock_example writer    # terminal 1
+./seqlock_example reader    # terminal 2
+
+# Python examples
+PYTHONPATH=build python3 examples/python_seqlock.py
+PYTHONPATH=build python3 examples/python_cyclic_buffer.py
+```
+
 ## Tests
 
-| Test | Type | What it covers |
-|------|------|---------------|
-| `flat_type_test` | Unit | FlatType concept acceptance/rejection |
-| `double_buffer_swapper_test` | Unit | Swap mechanics, structs, large arrays |
-| `swap_runner_test` | Unit | Trigger/wait, exceptions, concurrent threads |
-| `safe_shm_test` | Integration | Storage + DblBufLoader round-trip |
-| `shared_memory_test` | Integration | SharedMemory typed wrapper |
-| `image_shm_test` | Integration | DoubleBufferShm with FHD images |
-| `integration_test` | Integration | Cross-process (fork) all components |
-| `seqlock_test` | Integration | Seqlock store/load, cross-process, concurrent, blocking |
+| Test | Type | Assertions | What it covers |
+|------|------|-----------|---------------|
+| `flat_type_test` | Unit | — | FlatType concept acceptance/rejection |
+| `double_buffer_swapper_test` | Unit | — | Swap mechanics, structs, large arrays |
+| `swap_runner_test` | Unit | — | Trigger/wait, exceptions, concurrent threads |
+| `safe_shm_test` | Integration | — | Storage + DblBufLoader round-trip |
+| `shared_memory_test` | Integration | — | SharedMemory typed wrapper |
+| `image_shm_test` | Integration | — | DoubleBufferShm with FHD images |
+| `integration_test` | Integration | — | Cross-process (fork) all components |
+| `seqlock_test` | Integration | — | Seqlock store/load, cross-process, concurrent, blocking |
+| `stamped_test` | Integration | 28 | Stamped<T> layout, stamp(), monotonic clock, ShmStats |
+| `cyclic_buffer_test` | Integration | 24,252 | Insert/get, overflow, structs, cross-process, concurrent |
+| `time_series_test` | Integration | 66 | Binary search, interpolation, freshness, edge cases, unit confusion |
+| `shm_lifecycle_test` | Integration | 28 | OwnedShm, ShmHeader, heartbeat, liveness detection |
+| `cross_process_test` | Integration | 69 | All producer/consumer combos, 1-writer-3-readers, FHD images |
+| `sanitized_key_test` | Integration | 41 | SanitizedKey construction, validators, tag safety, TimeSeries integration |
 
 ## Benchmarks
 
-Run: `./benchmark` (built with `-O3 -DNDEBUG`, uses [nanobench](https://github.com/martinus/nanobench))
+Run with: `./benchmark && ./benchmark_competitors` (built with `-O3 -DNDEBUG`, [nanobench](https://github.com/martinus/nanobench))
 
 ### Throughput (store + load cycle)
 
 | Method | 64 B | 4 KB | 1 MB | FHD RGB (6 MB) |
 |--------|-----:|-----:|-----:|---------------:|
-| memcpy (baseline) | 59.8 GB/s | 113.9 GB/s | 26.5 GB/s | 22.4 GB/s |
-| raw POSIX shm (no sync) | 49.4 GB/s | 117.3 GB/s | 26.3 GB/s | 21.3 GB/s |
-| **Seqlock (lock-free)** | **0.4 GB/s** | **8.3 GB/s** | **7.5 GB/s** | **20.8 GB/s** |
-| SharedMemory (no sync) | 39.9 GB/s | 61.9 GB/s | 12.6 GB/s | — |
-| DoubleBufferShm (futex) | ~5 MB/s | 0.1 GB/s | 5.7 GB/s | 7.8 GB/s |
-| Storage + DblBufLoader (futex) | ~3 MB/s | 0.2 GB/s | 5.9 GB/s | — |
-| pipe (kernel IPC) | 0.1 GB/s | 8.2 GB/s | 6.0 GB/s | — |
+| memcpy (baseline) | 55-60 GB/s | 120-125 GB/s | 26-29 GB/s | 36 GB/s |
+| raw POSIX shm (no sync) | 63 GB/s | 128 GB/s | 28 GB/s | 35 GB/s |
+| **Seqlock (lock-free)** | **0.4 GB/s** | **9.3 GB/s** | **9.2 GB/s** | **38 GB/s** |
+| **CyclicBuffer (per-slot seqlock)** | **0.4 GB/s** | **11.5 GB/s** | **9.1 GB/s** | **39 GB/s** |
+| DoubleBufferShm (futex) | ~6 MB/s | 0.15 GB/s | 6.8 GB/s | 12 GB/s |
+| POSIX mq (kernel IPC) | 0.16 GB/s | 7.4 GB/s | — | — |
+| Unix domain socket | 0.13 GB/s | 6.2 GB/s | — | — |
+| pipe (kernel IPC) | 0.17 GB/s | 9.4 GB/s | 8.4 GB/s | — |
 
-### Key takeaways
+### TimeSeries Query Latency
 
-- **Seqlock at FHD**: 20.8 GB/s — **98% of raw memcpy** with full read consistency
-- **Seqlock vs DoubleBufferShm**: **2.7x faster** at FHD (no background thread, no extra memcpy)
-- **DoubleBufferShm**: thread scheduling dominates at small payloads; competitive at 1 MB+
-- **Seqlock read latency**: single `memcpy` — no lock acquire, no syscall, no thread wake
-- **Cross-process (fork)**: ~9 µs for 64 B round-trip (dominated by fork overhead)
+| Operation | Latency | Throughput |
+|-----------|--------:|----------:|
+| `find_closest` (binary search, 64 elements) | 45 ns | 22 Mop/s |
+| `find_interpolation_pair` | 66 ns | 15 Mop/s |
+| `get_latest_if_fresh` | 11 ns | 91 Mop/s |
+
+### Key Takeaways
+
+- **CyclicBuffer at FHD**: 39 GB/s — matches raw memcpy with full ring buffer history
+- **Seqlock vs CyclicBuffer**: equivalent at small payloads, CyclicBuffer slightly faster at 4 KB
+- **vs kernel IPC**: 2.7x faster than pipe at 64 B, 60x faster than POSIX mq at 4 KB
+- **TimeSeries lookups**: 45 ns per binary search across 64 elements — suitable for real-time control loops
+- **Zero-copy**: no intermediate buffers, no kernel transitions, no thread wakeups on read path
+
+## Design Decisions
+
+**Per-slot seqlock** — Each CyclicBuffer slot has its own 32-bit sequence counter. Readers on slot `i` never contend with writers on slot `j`. The alternative (single global seqlock) forces retry on any concurrent write.
+
+**Power-of-two capacity** — `N & (N-1) == 0` enables bitmask modulo (`idx & (N-1)`) instead of expensive integer division. Enforced at compile time via `static_assert`.
+
+**`Stamped<T>` composability** — `Stamped<T>` is itself a `FlatType`, so `Seqlock<Stamped<SensorData>>`, `CyclicBuffer<Stamped<IMU>, 64>`, and `OwnedShm<Stamped<Config>>` all work without adapter code.
+
+**`std::optional` return types** — `try_get()`, `find_closest()`, `find_interpolation_pair()` return `std::optional<T>` instead of throwing. Compatible with `std::expected` patterns and real-time constraints (no heap allocation).
+
+**Futex for blocking** — `wait_for_write()` and `load_blocking()` use raw `FUTEX_WAIT`/`FUTEX_WAKE` (not `_PRIVATE`) for cross-process signaling. Uncontended path is a single atomic compare — no syscall.
 
 ## License
 
