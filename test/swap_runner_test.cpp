@@ -93,7 +93,6 @@ TEST_CASE("task exception is caught and logged")
     CHECK(logged.load());
 
     // Runner survives the exception and accepts more tasks
-    std::atomic<int> counter{0};
     // Can't replace the task, but the runner should still be alive
     // The original task will throw again
     runner.trigger();
@@ -112,7 +111,7 @@ TEST_CASE("concurrent triggers from multiple threads")
     constexpr int THREADS = 4;
     constexpr int PER_THREAD = 25;
 
-    std::vector<std::jthread> threads;
+    std::vector<std::thread> threads;
     threads.reserve(THREADS);
     for (int t = 0; t < THREADS; ++t)
     {
@@ -124,7 +123,8 @@ TEST_CASE("concurrent triggers from multiple threads")
                 runner.wait();
             } });
     }
-    threads.clear(); // join all
+    for (auto &th : threads)
+        th.join();
 
     // Due to coalescing (trigger while already triggered), counter may be
     // less than THREADS * PER_THREAD, but must be at least PER_THREAD
