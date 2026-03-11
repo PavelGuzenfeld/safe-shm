@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
-project(safe-shm)
+include(cmake/version.cmake)
+project(safe-shm VERSION ${PROJECT_VERSION})
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -86,10 +87,12 @@ install(
 )
 
 # Optional: Python bindings (nanobind)
-find_package(Python3 COMPONENTS Interpreter Development QUIET)
-find_package(nanobind CONFIG QUIET HINTS /usr/local/nanobind/cmake)
+find_package(Python COMPONENTS Interpreter Development QUIET)
+if (Python_FOUND AND TARGET Python::Module)
+    find_package(nanobind CONFIG QUIET HINTS /usr/local/nanobind/cmake)
+endif()
 
-if (nanobind_FOUND AND Python3_FOUND)
+if (nanobind_FOUND AND Python_FOUND)
     message(STATUS "Building Python bindings (nanobind found)")
     nanobind_add_module(image_shm_dblbuff
         NB_STATIC
@@ -101,15 +104,30 @@ if (nanobind_FOUND AND Python3_FOUND)
     if (CMAKE_BUILD_TYPE STREQUAL "Release")
         target_compile_options(image_shm_dblbuff PRIVATE -O3 -DNDEBUG)
     else()
-        set_warnings(image_shm_dblbuff)
+        # nanobind headers don't compile clean with -Werror -Wshadow under GCC 15 + C++23
+        target_compile_options(image_shm_dblbuff PRIVATE -Wall -Wextra -g)
         set_sanitizers(image_shm_dblbuff)
     endif()
 
-    install(TARGETS image_shm_dblbuff
-        DESTINATION lib/python${Python3_VERSION_MAJOR}.${Python3_VERSION_MINOR}/site-packages
+    nanobind_add_module(safe_shm_py
+        NB_STATIC
+        src/bindings/nanobind_safe_shm.cpp
+    )
+    target_include_directories(safe_shm_py PRIVATE include)
+    target_link_libraries(safe_shm_py PRIVATE fmt shm::shm exception-rt::exception-rt)
+
+    if (CMAKE_BUILD_TYPE STREQUAL "Release")
+        target_compile_options(safe_shm_py PRIVATE -O3 -DNDEBUG)
+    else()
+        target_compile_options(safe_shm_py PRIVATE -Wall -Wextra -g)
+        set_sanitizers(safe_shm_py)
+    endif()
+
+    install(TARGETS image_shm_dblbuff safe_shm_py
+        DESTINATION lib/python${Python_VERSION_MAJOR}.${Python_VERSION_MINOR}/site-packages
     )
 else()
-    message(STATUS "Skipping Python bindings (nanobind or Python3 not found)")
+    message(STATUS "Skipping Python bindings (nanobind or Python not found)")
 endif()
 
 # Tests
@@ -152,6 +170,12 @@ add_integration_test(shared_memory_test test/shared_memory_test.cpp)
 add_integration_test(image_shm_test test/image_shm_test.cpp)
 add_integration_test(integration_test test/integration_test.cpp)
 add_integration_test(seqlock_test test/seqlock_test.cpp)
+add_integration_test(stamped_test test/stamped_test.cpp)
+add_integration_test(cyclic_buffer_test test/cyclic_buffer_test.cpp)
+add_integration_test(time_series_test test/time_series_test.cpp)
+add_integration_test(shm_lifecycle_test test/shm_lifecycle_test.cpp)
+add_integration_test(cross_process_test test/cross_process_test.cpp)
+add_integration_test(sanitized_key_test test/sanitized_key_test.cpp)
 
 # Benchmarks (nanobench, always built with -O3, no sanitizers)
 FetchContent_Declare(
@@ -168,3 +192,41 @@ target_link_libraries(benchmark PRIVATE nanobench fmt shm::shm exception-rt::exc
 target_compile_options(benchmark PRIVATE -O3 -DNDEBUG)
 set_warnings(benchmark)
 add_test(NAME benchmark COMMAND benchmark)
+
+add_executable(benchmark_competitors bench/benchmark_competitors.cpp)
+target_include_directories(benchmark_competitors PRIVATE include)
+target_link_libraries(benchmark_competitors PRIVATE nanobench fmt shm::shm exception-rt::exception-rt rt)
+target_compile_options(benchmark_competitors PRIVATE -O3 -DNDEBUG)
+set_warnings(benchmark_competitors)
+add_test(NAME benchmark_competitors COMMAND benchmark_competitors)
+
+# Examples
+function(add_example name source)
+    add_executable(${name} ${source})
+    target_include_directories(${name} PRIVATE include)
+    target_link_libraries(${name} PRIVATE fmt shm::shm exception-rt::exception-rt)
+    set_warnings(${name})
+endfunction()
+
+add_example(seqlock_example examples/seqlock_example.cpp)
+add_example(cyclic_buffer_example examples/cyclic_buffer_example.cpp)
+add_example(lifecycle_example examples/lifecycle_example.cpp)
+add_example(cross_language_writer test/cross_language_writer.cpp)
+
+# Fuzz targets (clang only, needs -fsanitize=fuzzer)
+if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND SANITIZER STREQUAL "fuzzer")
+    function(add_fuzz_target name source)
+        add_executable(${name} ${source})
+        target_include_directories(${name} PRIVATE include)
+        target_link_libraries(${name} PRIVATE fmt shm::shm exception-rt::exception-rt)
+        target_compile_options(${name} PRIVATE
+            -fsanitize=fuzzer,address
+            -g -O1
+            -Wall -Wextra -Wpedantic
+        )
+        target_link_options(${name} PRIVATE -fsanitize=fuzzer,address)
+    endfunction()
+
+    add_fuzz_target(fuzz_cyclic_buffer fuzz/fuzz_cyclic_buffer.cpp)
+    add_fuzz_target(fuzz_time_series fuzz/fuzz_time_series.cpp)
+endif()
