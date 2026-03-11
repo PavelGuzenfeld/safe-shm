@@ -87,9 +87,9 @@ install(
 )
 
 # Optional: Python bindings (nanobind)
-find_package(Python COMPONENTS Interpreter Development QUIET)
-if (Python_FOUND AND TARGET Python::Module)
-    find_package(nanobind CONFIG QUIET HINTS /usr/local/nanobind/cmake)
+find_package(Python COMPONENTS Interpreter Development.Module QUIET)
+if (Python_FOUND)
+    find_package(nanobind CONFIG QUIET)
 endif()
 
 if (nanobind_FOUND AND Python_FOUND)
@@ -123,9 +123,15 @@ if (nanobind_FOUND AND Python_FOUND)
         set_sanitizers(safe_shm_py)
     endif()
 
-    install(TARGETS image_shm_dblbuff safe_shm_py
-        DESTINATION lib/python${Python_VERSION_MAJOR}.${Python_VERSION_MINOR}/site-packages
-    )
+    if (DEFINED SKBUILD)
+        install(TARGETS image_shm_dblbuff safe_shm_py
+            DESTINATION ${SKBUILD_PLATLIB_DIR}
+        )
+    else()
+        install(TARGETS image_shm_dblbuff safe_shm_py
+            DESTINATION lib/python${Python_VERSION_MAJOR}.${Python_VERSION_MINOR}/site-packages
+        )
+    endif()
 else()
     message(STATUS "Skipping Python bindings (nanobind or Python not found)")
 endif()
