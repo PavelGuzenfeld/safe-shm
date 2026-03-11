@@ -130,103 +130,107 @@ else()
     message(STATUS "Skipping Python bindings (nanobind or Python not found)")
 endif()
 
-# Tests
-include(FetchContent)
-FetchContent_Declare(
-    doctest
-    GIT_REPOSITORY https://github.com/doctest/doctest.git
-    GIT_TAG v2.4.12
-)
-FetchContent_MakeAvailable(doctest)
+# Tests, benchmarks, examples, fuzz targets
+option(SAFE_SHM_BUILD_TESTS "Build tests, benchmarks, examples and fuzz targets" ON)
 
-enable_testing()
+if (SAFE_SHM_BUILD_TESTS)
+    include(FetchContent)
+    FetchContent_Declare(
+        doctest
+        GIT_REPOSITORY https://github.com/doctest/doctest.git
+        GIT_TAG v2.4.12
+    )
+    FetchContent_MakeAvailable(doctest)
 
-# Unit tests (no shm dependency — pure C++ components)
-function(add_unit_test name source)
-    add_executable(${name} ${source})
-    target_include_directories(${name} PRIVATE include)
-    target_link_libraries(${name} PRIVATE doctest::doctest)
-    set_warnings(${name})
-    set_sanitizers(${name})
-    add_test(NAME ${name} COMMAND ${name})
-endfunction()
+    enable_testing()
 
-add_unit_test(flat_type_test test/flat_type_test.cpp)
-add_unit_test(double_buffer_swapper_test test/double_buffer_swapper_test.cpp)
-add_unit_test(swap_runner_test test/swap_runner_test.cpp)
+    # Unit tests (no shm dependency — pure C++ components)
+    function(add_unit_test name source)
+        add_executable(${name} ${source})
+        target_include_directories(${name} PRIVATE include)
+        target_link_libraries(${name} PRIVATE doctest::doctest)
+        set_warnings(${name})
+        set_sanitizers(${name})
+        add_test(NAME ${name} COMMAND ${name})
+    endfunction()
 
-# Integration tests (require shm dependency)
-function(add_integration_test name source)
-    add_executable(${name} ${source})
-    target_include_directories(${name} PRIVATE include)
-    target_link_libraries(${name} PRIVATE doctest::doctest fmt shm::shm exception-rt::exception-rt)
-    set_warnings(${name})
-    set_sanitizers(${name})
-    add_test(NAME ${name} COMMAND ${name})
-endfunction()
+    add_unit_test(flat_type_test test/flat_type_test.cpp)
+    add_unit_test(double_buffer_swapper_test test/double_buffer_swapper_test.cpp)
+    add_unit_test(swap_runner_test test/swap_runner_test.cpp)
 
-add_integration_test(safe_shm_test test/safe_shm_test.cpp)
-add_integration_test(shared_memory_test test/shared_memory_test.cpp)
-add_integration_test(image_shm_test test/image_shm_test.cpp)
-add_integration_test(integration_test test/integration_test.cpp)
-add_integration_test(seqlock_test test/seqlock_test.cpp)
-add_integration_test(stamped_test test/stamped_test.cpp)
-add_integration_test(cyclic_buffer_test test/cyclic_buffer_test.cpp)
-add_integration_test(time_series_test test/time_series_test.cpp)
-add_integration_test(shm_lifecycle_test test/shm_lifecycle_test.cpp)
-add_integration_test(cross_process_test test/cross_process_test.cpp)
-add_integration_test(sanitized_key_test test/sanitized_key_test.cpp)
+    # Integration tests (require shm dependency)
+    function(add_integration_test name source)
+        add_executable(${name} ${source})
+        target_include_directories(${name} PRIVATE include)
+        target_link_libraries(${name} PRIVATE doctest::doctest fmt shm::shm exception-rt::exception-rt)
+        set_warnings(${name})
+        set_sanitizers(${name})
+        add_test(NAME ${name} COMMAND ${name})
+    endfunction()
 
-# Benchmarks (nanobench, always built with -O3, no sanitizers)
-FetchContent_Declare(
-    nanobench
-    GIT_REPOSITORY https://github.com/martinus/nanobench.git
-    GIT_TAG v4.3.11
-    GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(nanobench)
+    add_integration_test(safe_shm_test test/safe_shm_test.cpp)
+    add_integration_test(shared_memory_test test/shared_memory_test.cpp)
+    add_integration_test(image_shm_test test/image_shm_test.cpp)
+    add_integration_test(integration_test test/integration_test.cpp)
+    add_integration_test(seqlock_test test/seqlock_test.cpp)
+    add_integration_test(stamped_test test/stamped_test.cpp)
+    add_integration_test(cyclic_buffer_test test/cyclic_buffer_test.cpp)
+    add_integration_test(time_series_test test/time_series_test.cpp)
+    add_integration_test(shm_lifecycle_test test/shm_lifecycle_test.cpp)
+    add_integration_test(cross_process_test test/cross_process_test.cpp)
+    add_integration_test(sanitized_key_test test/sanitized_key_test.cpp)
 
-add_executable(benchmark bench/benchmark.cpp)
-target_include_directories(benchmark PRIVATE include)
-target_link_libraries(benchmark PRIVATE nanobench fmt shm::shm exception-rt::exception-rt)
-target_compile_options(benchmark PRIVATE -O3 -DNDEBUG)
-set_warnings(benchmark)
-add_test(NAME benchmark COMMAND benchmark)
+    # Benchmarks (nanobench, always built with -O3, no sanitizers)
+    FetchContent_Declare(
+        nanobench
+        GIT_REPOSITORY https://github.com/martinus/nanobench.git
+        GIT_TAG v4.3.11
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(nanobench)
 
-add_executable(benchmark_competitors bench/benchmark_competitors.cpp)
-target_include_directories(benchmark_competitors PRIVATE include)
-target_link_libraries(benchmark_competitors PRIVATE nanobench fmt shm::shm exception-rt::exception-rt rt)
-target_compile_options(benchmark_competitors PRIVATE -O3 -DNDEBUG)
-set_warnings(benchmark_competitors)
-add_test(NAME benchmark_competitors COMMAND benchmark_competitors)
+    add_executable(benchmark bench/benchmark.cpp)
+    target_include_directories(benchmark PRIVATE include)
+    target_link_libraries(benchmark PRIVATE nanobench fmt shm::shm exception-rt::exception-rt)
+    target_compile_options(benchmark PRIVATE -O3 -DNDEBUG)
+    set_warnings(benchmark)
+    add_test(NAME benchmark COMMAND benchmark)
 
-# Examples
-function(add_example name source)
-    add_executable(${name} ${source})
-    target_include_directories(${name} PRIVATE include)
-    target_link_libraries(${name} PRIVATE fmt shm::shm exception-rt::exception-rt)
-    set_warnings(${name})
-endfunction()
+    add_executable(benchmark_competitors bench/benchmark_competitors.cpp)
+    target_include_directories(benchmark_competitors PRIVATE include)
+    target_link_libraries(benchmark_competitors PRIVATE nanobench fmt shm::shm exception-rt::exception-rt rt)
+    target_compile_options(benchmark_competitors PRIVATE -O3 -DNDEBUG)
+    set_warnings(benchmark_competitors)
+    add_test(NAME benchmark_competitors COMMAND benchmark_competitors)
 
-add_example(seqlock_example examples/seqlock_example.cpp)
-add_example(cyclic_buffer_example examples/cyclic_buffer_example.cpp)
-add_example(lifecycle_example examples/lifecycle_example.cpp)
-add_example(cross_language_writer test/cross_language_writer.cpp)
-
-# Fuzz targets (clang only, needs -fsanitize=fuzzer)
-if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND SANITIZER STREQUAL "fuzzer")
-    function(add_fuzz_target name source)
+    # Examples
+    function(add_example name source)
         add_executable(${name} ${source})
         target_include_directories(${name} PRIVATE include)
         target_link_libraries(${name} PRIVATE fmt shm::shm exception-rt::exception-rt)
-        target_compile_options(${name} PRIVATE
-            -fsanitize=fuzzer,address
-            -g -O1
-            -Wall -Wextra -Wpedantic
-        )
-        target_link_options(${name} PRIVATE -fsanitize=fuzzer,address)
+        set_warnings(${name})
     endfunction()
 
-    add_fuzz_target(fuzz_cyclic_buffer fuzz/fuzz_cyclic_buffer.cpp)
-    add_fuzz_target(fuzz_time_series fuzz/fuzz_time_series.cpp)
+    add_example(seqlock_example examples/seqlock_example.cpp)
+    add_example(cyclic_buffer_example examples/cyclic_buffer_example.cpp)
+    add_example(lifecycle_example examples/lifecycle_example.cpp)
+    add_example(cross_language_writer test/cross_language_writer.cpp)
+
+    # Fuzz targets (clang only, needs -fsanitize=fuzzer)
+    if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND SANITIZER STREQUAL "fuzzer")
+        function(add_fuzz_target name source)
+            add_executable(${name} ${source})
+            target_include_directories(${name} PRIVATE include)
+            target_link_libraries(${name} PRIVATE fmt shm::shm exception-rt::exception-rt)
+            target_compile_options(${name} PRIVATE
+                -fsanitize=fuzzer,address
+                -g -O1
+                -Wall -Wextra -Wpedantic
+            )
+            target_link_options(${name} PRIVATE -fsanitize=fuzzer,address)
+        endfunction()
+
+        add_fuzz_target(fuzz_cyclic_buffer fuzz/fuzz_cyclic_buffer.cpp)
+        add_fuzz_target(fuzz_time_series fuzz/fuzz_time_series.cpp)
+    endif()
 endif()
