@@ -23,6 +23,8 @@ classifiers = [
 [project.urls]
 Homepage = "https://github.com/PavelGuzenfeld/safe-shm"
 Repository = "https://github.com/PavelGuzenfeld/safe-shm"
+Blog = "https://pavelguzenfeld.com/posts/gst-shm-bugs/"
+Author = "https://pavelguzenfeld.com"
 
 [tool.scikit-build]
 cmake.build-type = "Release"
