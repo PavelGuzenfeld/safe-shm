@@ -1,0 +1,49 @@
+# Diff-scoped mutation gate. See issue #10.
+#
+# Build and suite run in the image from Dockerfile.test, which carries the
+# exception-rt and shm dependencies. Build it once before the first gated
+# commit, or every run refuses on a missing image:
+#
+#   docker build -f Dockerfile.test -t safe-shm-test:latest .
+#
+# --user keeps build-gate/ owned by the host user; without it the container
+# writes a root-owned tree the host cannot remove without another container.
+# HOME=/tmp because a uid with no passwd entry has no writable home.
+#
+# Measured 2026-09-17, 20 cores: clean configure+build 47s, ctest 0.65s for
+# 14 tests, incremental rebuild after touching one header 23.6s (seqlock.hpp)
+# to 42.7s (flat_type.hpp, wide fan-out). The library is header-only, so every
+# mutant lands in a header and pays the wide-rebuild price — roughly 30s per
+# mutant, against ~3s in other C++ repos here. Affordable, but a diff with ten
+# mutable sites is a five-minute gate.
+language = "cpp"
+test_paths = ["test"]
+
+# The leading touch is load-bearing, not tidiness. The gate sets the per-mutant
+# timeout from the baseline run, and an unmutated baseline against a warm
+# build-gate/ rebuilds nothing and clocks 1.8s — giving a 30s timeout while a
+# real mutant, which edits a header, needs 24-43s to rebuild. Mutants on the
+# wide headers would then time out, and a timeout counts as KILLED, so the gate
+# would report a perfect score having measured nothing. Touching a header makes
+# the baseline pay what every mutant pays.
+test_command = 'docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -v "$PWD":/src -w /src safe-shm-test:latest bash -c "touch include/safe-shm/seqlock.hpp && cmake -S . -B build-gate -DCMAKE_BUILD_TYPE=Release && cmake --build build-gate -j$(nproc) && ctest --test-dir build-gate -E benchmark"'
+
+# Exit 0 with no pass marker is a runner that never loaded the code, and the
+# gate would read that as every mutant surviving.
+pass_pattern = "tests passed"
+
+# Clean build plus suite, with headroom for a cold FetchContent of doctest.
+baseline_timeout = 1200.0
+
+exclude_paths = [
+    # Registered as ctest tests but excluded from the gate's run: nanobench
+    # timing loops measure, they do not assert.
+    "bench",
+    # Built only under clang with -fsanitize=fuzzer, so no reachable build
+    # compiles them here and every mutant would survive for want of one.
+    "fuzz",
+    # No test asserts on them; they exist to be read.
+    "examples",
+    # Python bindings, not compiled by this CMake configuration.
+    "src/bindings",
+]
