@@ -1,0 +1,11 @@
+repos:
+  # Diff-scoped mutation gate (issue #10). Needs Docker and the safe-shm-test
+  # image from Dockerfile.test; build it once before the first gated commit.
+  - repo: local
+    hooks:
+      - id: mutation-gate
+        name: mutation gate (diff-scoped)
+        entry: mutation-gate --staged
+        language: system
+        files: ^(include/safe-shm/.*\.hpp|test/.*\.cpp)$
+        pass_filenames: false
